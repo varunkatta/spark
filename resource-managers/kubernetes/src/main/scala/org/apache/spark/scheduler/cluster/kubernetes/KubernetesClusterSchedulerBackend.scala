@@ -21,6 +21,7 @@ import collection.JavaConverters._
 import io.fabric8.kubernetes.api.model.PodBuilder
 import io.fabric8.kubernetes.api.model.extensions.JobBuilder
 import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient}
+import org.apache.spark.deploy.kubernetes.SparkJobResource
 import org.apache.spark.internal.config._
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster._
@@ -42,7 +43,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
   val client = new DefaultKubernetesClient()
 
   val DEFAULT_NUMBER_EXECUTORS = 2
-  val sparkExecutorName = s"spark-executor-${Random.alphanumeric take 5 mkString("")}".toLowerCase()
+  val podPrefix = s"spark-executor-${Random.alphanumeric take 5 mkString("")}".toLowerCase()
 
   // TODO: do these need mutex guarding?
   // key is executor id, value is pod name
@@ -50,10 +51,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
   var shutdownToPod = mutable.Map.empty[String, String] // pending shutdown
   var executorID = 0
 
-  val sparkDriverImage = sc.getConf.get("spark.kubernetes.driver.image")
-  val clientJarUri = sc.getConf.get("spark.executor.jar")
-  val ns = sc.getConf.get("spark.kubernetes.namespace")
-  val dynamicExecutors = Utils.isDynamicAllocationEnabled(sc.getConf)
+  val sparkImage = conf.get("spark.kubernetes.sparkImage")
+  val clientJarUri = conf.get("spark.executor.jar")
+  val ns = conf.get(
+    "spark.kubernetes.namespace",
+    KubernetesClusterScheduler.defaultNameSpace)
+  val dynamicExecutors = Utils.isDynamicAllocationEnabled(conf)
+  val sparkJobresource = new SparkJobResource(client)
 
   // executor back-ends take their configuration this way
   if (dynamicExecutors) {
@@ -63,6 +67,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
   override def start(): Unit = {
     super.start()
+    sparkJobresource.createJobObject(podPrefix, getInitialTargetExecutorNumber(sc.getConf),
+      sparkImage)
     createExecutorPods(getInitialTargetExecutorNumber(sc.getConf))
   }
 
@@ -70,6 +76,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
     // Kill all executor pods indiscriminately
     killExecutorPods(executorToPod.toVector)
     killExecutorPods(shutdownToPod.toVector)
+    sparkJobresource.deleteJobObject(podPrefix)
     super.stop()
   }
 
@@ -94,6 +101,9 @@ private[spark] class KubernetesClusterSchedulerBackend(
         shutdownExecutors(executorToPod.toVector.slice(n - r, n))
       }
     }
+
+    // TODO: be smarter about when to update.
+    sparkJobresource.updateJobObject(podPrefix, "/spec/num-executors", requestedTotal.toString)
     // TODO: are there meaningful failure modes here?
     Future.successful(true)
   }
@@ -171,7 +181,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
   def createExecutorPod(executorNum: Int): String = {
     // create a single k8s executor pod.
     val labelMap = Map("type" -> "spark-executor")
-    val podName = s"$sparkExecutorName-$executorNum"
+    val podName = s"$podPrefix-$executorNum"
 
     val submitArgs = mutable.ArrayBuffer.empty[String]
 
