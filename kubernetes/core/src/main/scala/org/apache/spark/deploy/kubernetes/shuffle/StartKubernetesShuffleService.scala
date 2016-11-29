@@ -35,6 +35,7 @@ private[spark] case class StartKubernetesShuffleServiceArguments(
   shuffleServiceMemory: String,
   shuffleServiceDockerImage: String,
   shuffleHostPathDir: String,
+  shuffleServiceAuthEnabled: Boolean,
   kubernetesClientCertFile: Option[String] = None,
   kubernetesClientKeyFile: Option[String] = None,
   kubernetesCaCertFile: Option[String] = None)
@@ -46,6 +47,7 @@ private[spark] case class StartKubernetesShuffleServiceArgumentsBuilder(
   shuffleServicePort: Int = 7337,
   shuffleServiceMemory: String = "1g",
   shuffleHostPathDir: String = "/tmp",
+  shuffleServiceAuthEnabled: Boolean = false,
   shuffleServiceDockerImage: String = s"spark-shuffle-service:$SPARK_VERSION",
   kubernetesClientCertFile: Option[String] = None,
   kubernetesClientKeyFile: Option[String] = None,
@@ -64,6 +66,7 @@ private[spark] case class StartKubernetesShuffleServiceArgumentsBuilder(
       shuffleServiceMemory = shuffleServiceMemory,
       shuffleHostPathDir = shuffleHostPathDir,
       shuffleServiceDockerImage = shuffleServiceDockerImage,
+      shuffleServiceAuthEnabled = shuffleServiceAuthEnabled,
       kubernetesClientCertFile = kubernetesClientCertFile,
       kubernetesClientKeyFile = kubernetesClientKeyFile,
       kubernetesCaCertFile = kubernetesCaCertFile)
@@ -78,7 +81,7 @@ private[spark] object StartKubernetesShuffleServiceArgumentsBuilder
     var currentBuilder = new StartKubernetesShuffleServiceArgumentsBuilder()
     while (args.nonEmpty) {
       currentBuilder = args match {
-        case "--kubernetes-master" :: value :: tail =>
+        case KUBERNETES_MASTER :: value :: tail =>
           args = tail
           currentBuilder.copy(
             kubernetesMaster = Some(Validate.notBlank(value,
@@ -105,6 +108,9 @@ private[spark] object StartKubernetesShuffleServiceArgumentsBuilder
           args = tail
           currentBuilder.copy(shuffleHostPathDir = Validate.notBlank(value,
             "Shuffle host directory must not be empty."))
+        case "--enable-auth" :: value :: tail =>
+          args = tail
+          currentBuilder.copy(shuffleServiceAuthEnabled = value.toBoolean)
         case KUBERNETES_CLIENT_KEY_FILE :: value :: tail =>
           args = tail
           currentBuilder.copy(
@@ -187,6 +193,18 @@ private[spark] class StartKubernetesShuffleService {
                 .addNewEnv()
                   .withName("SPARK_SHUFFLE_SERVICE_MEMORY")
                   .withValue(parsedArguments.shuffleServiceMemory)
+                  .endEnv()
+                .addNewEnv()
+                  .withName("KUBERNETES_MASTER")
+                  .withValue(parsedArguments.kubernetesMaster)
+                  .endEnv()
+                .addNewEnv()
+                  .withName("SHUFFLE_SERVICE_SECRETS_NAMESPACE")
+                  .withValue(parsedArguments.shuffleServiceNamespace)
+                  .endEnv()
+                .addNewEnv()
+                  .withName("SPARK_AUTH_ENABLED")
+                  .withValue(parsedArguments.shuffleServiceAuthEnabled.toString)
                   .endEnv()
                 .withNewResources()
                   .addToRequests("memory", shuffleServiceMemoryQuantity)

@@ -31,8 +31,7 @@ import org.apache.commons.codec.binary.Base64
 import org.apache.commons.io.IOUtils
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration.Duration
+import scala.concurrent.{ExecutionContext}
 import scala.concurrent.duration.DurationInt
 import scala.util.Success
 
@@ -59,25 +58,6 @@ private[spark] class Client(private val clientArgs: ClientArguments)
         .setNameFormat("kubernetes-client-retryable-futures-%d")
         .setDaemon(true)
         .build()))
-
-  private def retryableFuture[T]
-      (times: Int, interval: Duration)
-      (f: => Future[T])
-      (implicit executionContext: ExecutionContext = retryableExecutionContext): Future[T] = {
-    f recoverWith {
-      case _ if times > 0 => {
-        Thread.sleep(interval.toMillis)
-        retryableFuture(times - 1, interval)(f)
-      }
-    }
-  }
-
-  private def retry[T]
-      (times: Int, interval: Duration)
-      (f: => T)
-      (implicit executionContext: ExecutionContext = retryableExecutionContext): Future[T] = {
-    retryableFuture(times, interval)(Future[T] { f })
-  }
 
   def run(): Unit = {
     var k8ConfBuilder = new ConfigBuilder()
@@ -134,7 +114,7 @@ private[spark] class Client(private val clientArgs: ClientArguments)
                 case Some(status) =>
                   try {
                     val driverLauncher = getDriverLauncherService(k8ClientConfig)
-                    val ping = retry(5, 5.seconds) {
+                    val ping = Retry.retry(5, 5.seconds) {
                       driverLauncher.ping()
                     }
                     ping onFailure {
@@ -203,7 +183,7 @@ private[spark] class Client(private val clientArgs: ClientArguments)
                   .withValue(kubernetesAppId)
                   .endEnv()
                 .addNewEnv()
-                  .withName("SPARK_DRIVER_LAUNCHER_APP_SECRET_LOCATION")
+                  .withName("SPARK_APP_SECRET_LOCATION")
                   .withValue(s"/opt/spark/spark-app-secret/$DRIVER_LAUNCHER_SECRET_NAME")
                   .endEnv()
                 .addNewEnv()

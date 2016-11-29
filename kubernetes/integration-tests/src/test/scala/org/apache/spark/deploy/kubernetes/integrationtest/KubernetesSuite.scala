@@ -23,10 +23,9 @@ import java.util.UUID
 import com.google.common.base.Charsets
 import com.google.common.collect.ImmutableList
 import com.google.common.io.Files
-import io.fabric8.kubernetes.api.model.{Pod, ReplicationController}
+import io.fabric8.kubernetes.api.model.Pod
 import io.fabric8.kubernetes.client.{Config, KubernetesClient}
 import org.apache.commons.io.FileUtils
-import org.apache.spark.deploy.kubernetes.shuffle.{StartKubernetesShuffleServiceArgumentsBuilder, StartKubernetesShuffleServiceArguments, StartKubernetesShuffleService}
 import org.scalatest.BeforeAndAfter
 import org.scalatest.concurrent.{Eventually, PatienceConfiguration}
 import org.scalatest.time.{Minutes, Seconds, Span}
@@ -36,6 +35,7 @@ import org.apache.spark.deploy.kubernetes.{Client, ClientArguments}
 import org.apache.spark.deploy.kubernetes.integrationtest.docker.SparkDockerImageBuilder
 import org.apache.spark.deploy.kubernetes.integrationtest.minikube.Minikube
 import org.apache.spark.deploy.kubernetes.integrationtest.restapis.SparkRestApiV1
+import org.apache.spark.deploy.kubernetes.shuffle.{StartKubernetesShuffleService, StartKubernetesShuffleServiceArgumentsBuilder}
 import org.apache.spark.status.api.v1.{ApplicationStatus, StageStatus}
 import org.apache.spark.SparkFunSuite
 
@@ -50,8 +50,8 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
   private val INTERVAL = PatienceConfiguration.Interval(Span(2, Seconds))
   private val MAIN_CLASS = "org.apache.spark.deploy.kubernetes" +
     ".integrationtest.jobs.SparkPiWithInfiniteWait"
-  private val NAMESPACE = UUID.randomUUID.toString.replaceAll("-", "")
-  private val SHUFFLE_SERVICE_NAMESPACE = UUID.randomUUID.toString.replaceAll("-", "")
+  private val NAMESPACE = UUID.randomUUID().toString.replaceAll("-", "")
+  private val SHUFFLE_SERVICE_NAMESPACE = UUID.randomUUID().toString.replaceAll("-", "")
   private val SHUFFLE_SERVICE_NAME = "spark-shuffle-service"
   private var minikubeKubernetesClient: KubernetesClient = _
   private var clientConfig: Config = _
@@ -74,11 +74,12 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
     Minikube.executeMinikubeSsh("mkdir -p /tmp/spark-shuffles")
     clientConfig = minikubeKubernetesClient.getConfiguration
     val startShuffleArgs = new StartKubernetesShuffleServiceArgumentsBuilder()
-      .copy(kubernetesMaster = Some(clientConfig.getMasterUrl))
+      .copy(kubernetesMaster = Some(s"https://${Minikube.getMinikubeIp}:8443"))
       .copy(shuffleServiceNamespace = Some(SHUFFLE_SERVICE_NAMESPACE))
       .copy(shuffleServiceDaemonSetName = SHUFFLE_SERVICE_NAME)
       .copy(shuffleServiceDockerImage = "spark-shuffle-service:latest")
       .copy(shuffleServiceMemory = "512m")
+      .copy(shuffleServiceAuthEnabled = true)
       .copy(kubernetesCaCertFile = Some(clientConfig.getCaCertFile))
       .copy(kubernetesClientCertFile = Some(clientConfig.getClientCertFile))
       .copy(kubernetesClientKeyFile = Some(clientConfig.getClientKeyFile))
@@ -95,18 +96,20 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
   }
 
   after {
-    minikubeKubernetesClient
-      .services
-      .delete(minikubeKubernetesClient.services().list().getItems)
-    minikubeKubernetesClient
-      .pods()
-      .delete(minikubeKubernetesClient.pods().list().getItems)
+    val pods = minikubeKubernetesClient.pods().list().getItems.asScala
+    pods.par.foreach(pod => {
+      minikubeKubernetesClient
+        .pods()
+        .withName(pod.getMetadata.getName)
+        .withGracePeriod(60)
+        .delete
+    })
   }
 
   override def afterAll(): Unit = {
-    if (!System.getProperty("spark.docker.test.persistMinikube", "false").toBoolean) {
-      Minikube.deleteMinikube()
-    }
+//    if (!System.getProperty("spark.docker.test.persistMinikube", "false").toBoolean) {
+//      Minikube.deleteMinikube()
+//    }
   }
 
   private def expectationsForStaticAllocation(sparkMetricsService: SparkRestApiV1): Unit = {
@@ -172,6 +175,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       .addSparkConf("spark.shuffle.service.enabled", "true")
       .addSparkConf("spark.dynamicAllocation.executorIdleTimeout", "20s")
       .addSparkConf("spark.memory.storageFraction", "1.0")
+      .addSparkConf("spark.authenticate", "true")
       .kubernetesAppName("spark-pi-dyn")
       .driverDockerImage("spark-driver:latest")
       .executorDockerImage("spark-executor:latest")
@@ -205,6 +209,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       .addSparkConf("spark.shuffle.service.enabled", "true")
       .addSparkConf("spark.dynamicAllocation.executorIdleTimeout", "10s")
       .addSparkConf("spark.memory.storageFraction", "1.0")
+      .addSparkConf("spark.authenticate", "true")
       .kubernetesAppName("spark-pi-dyn")
       .driverDockerImage("spark-driver:latest")
       .executorDockerImage("spark-executor:latest")
@@ -312,6 +317,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       .addSparkConf("spark.shuffle.service.enabled", "true")
       .addSparkConf("spark.dynamicAllocation.executorIdleTimeout", "20s")
       .addSparkConf("spark.memory.storageFraction", "1.0")
+      .addSparkConf("spark.authenticate", "true")
       .kubernetesAppName("spark-pi-custom")
       .driverDockerImage("spark-driver:latest")
       .executorDockerImage("spark-executor:latest")

@@ -19,7 +19,7 @@ package org.apache.spark.scheduler.cluster.kubernetes
 import org.apache.spark.SparkContext
 import org.apache.spark.scheduler.{ExternalClusterManager, SchedulerBackend, TaskScheduler, TaskSchedulerImpl}
 
-class KubernetesClusterManager extends ExternalClusterManager {
+private[spark] class KubernetesClusterManager extends ExternalClusterManager {
 
   override def canCreate(masterURL: String): Boolean = masterURL.startsWith("kubernetes")
 

@@ -38,8 +38,8 @@ private[spark] class KubernetesDriverLauncherServer {
 
   private val port = System.getenv("SPARK_DRIVER_LAUNCHER_SERVER_PORT")
   assert(port != null, "SPARK_DRIVER_LAUNCHER_SERVER_PORT is not set.")
-  private val secretFile = System.getenv("SPARK_DRIVER_LAUNCHER_APP_SECRET_LOCATION")
-  assert(secretFile != null, "SPARK_DRIVER_LAUNCHER_APP_SECRET_LOCATION is not set.")
+  private val secretFile = System.getenv("SPARK_APP_SECRET_LOCATION")
+  assert(secretFile != null, "SPARK_APP_SECRET_LOCATION is not set.")
   private var jettyServer: Server = null
 
   // TODO(mcheah) use SSL

@@ -22,4 +22,4 @@ ENV JAVA_HOME /usr/lib/jvm/java-7-openjdk-amd64/jre
 
 WORKDIR /opt/spark
 
-CMD bin/spark-class org.apache.spark.deploy.kubernetes.driverlauncher.KubernetesDriverLauncherServer --driver-launcher-service-name $SPARK_DRIVER_LAUNCHER_SERVICE_NAME --application-secret-env $SPARK_DRIVER_LAUNCHER_APP_SECRET_ENV_NAME --driver-launcher-port $SPARK_DRIVER_LAUNCHER_SERVER_PORT
+CMD exec ${JAVA_HOME}/bin/java -cp /opt/spark/jars/\* org.apache.spark.deploy.kubernetes.driverlauncher.KubernetesDriverLauncherServer --driver-launcher-service-name $SPARK_DRIVER_LAUNCHER_SERVICE_NAME --application-secret-env $SPARK_DRIVER_LAUNCHER_APP_SECRET_ENV_NAME --driver-launcher-port $SPARK_DRIVER_LAUNCHER_SERVER_PORT

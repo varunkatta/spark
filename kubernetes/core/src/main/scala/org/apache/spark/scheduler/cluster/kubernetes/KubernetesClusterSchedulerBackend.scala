@@ -18,20 +18,24 @@ package org.apache.spark.scheduler.cluster.kubernetes
 
 import java.io.{File, FileInputStream}
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
+import com.google.common.base.Charsets
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.api.model.extensions.DaemonSet
-import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient}
+import org.apache.commons.codec.binary.Base64
+import org.apache.spark.network.netty.SparkTransportConf
+import org.apache.spark.network.sasl.SecretKeyHolder
+import org.apache.spark.network.shuffle.kubernetes.KubernetesExternalShuffleClient
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.{ExecutionContext, Future}
-import scala.io.Source
 
-import org.apache.spark.{SparkContext, SparkException}
+import org.apache.spark.{SecurityManager, SparkContext, SparkException}
+import org.apache.spark.deploy.kubernetes.KubernetesClientBuilder
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpointAddress, RpcEnv}
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.RetrieveSparkProps
 import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend
@@ -60,8 +64,6 @@ private[spark] class KubernetesClusterSchedulerBackend(
       .getOption("spark.kubernetes.namespace")
       .getOrElse(
         throw new SparkException("Kubernetes namespace must be specified in kubernetes mode."))
-
-  private val kubernetesAppId = conf.get("spark.kubernetes.app.id", sc.applicationId)
 
   private val executorPort = conf.get("spark.executor.port", DEFAULT_STATIC_PORT.toString).toInt
 
@@ -106,7 +108,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
               .setNameFormat("kubernetes-executor-requests-%d")
               .build))
 
-  private val kubernetesClient = createKubernetesClient()
+  private val kubernetesClient = KubernetesClientBuilder
+    .buildFromWithinPod(kubernetesMaster, kubernetesNamespace)
 
   private val externalShuffleServiceEnabled = conf.getBoolean(
     "spark.shuffle.service.enabled", defaultValue = false)
@@ -143,32 +146,53 @@ private[spark] class KubernetesClusterSchedulerBackend(
     value.toUpperCase.map { c => if (c == '-') '_' else c }
 
   private val initialExecutors = getInitialTargetExecutorNumber(1)
+  private val authEnabled = conf.getBoolean("spark.authenticate", defaultValue = false)
+  private val authSecret = if (authEnabled) {
+    conf.getOption("spark.authenticate.secret")
+      .getOrElse(
+        throw new IllegalArgumentException("No secret provided though spark.authenticate is true."))
+  } else {
+    "unused"
+  }
+
+  private val kubernetesSecretName = s"spark-secret-${applicationId()}"
 
   override def sufficientResourcesRegistered(): Boolean = {
     totalRegisteredExecutors.get() >= initialExecutors * minRegisteredRatio
   }
 
-  private def createKubernetesClient(): DefaultKubernetesClient = {
-    var clientConfigBuilder = new ConfigBuilder()
-        .withApiVersion("v1")
-        .withMasterUrl(kubernetesMaster)
-        .withNamespace(kubernetesNamespace)
-
-    if (CA_CERT_FILE.exists) {
-      clientConfigBuilder = clientConfigBuilder.withCaCertFile(CA_CERT_FILE.getAbsolutePath)
-    }
-
-    if (API_SERVER_TOKEN.exists) {
-      clientConfigBuilder = clientConfigBuilder.withOauthToken(
-          Source.fromFile(API_SERVER_TOKEN).mkString)
-    }
-    new DefaultKubernetesClient(clientConfigBuilder.build)
-  }
-
   override def start(): Unit = {
     super.start()
+    setupAuth()
     if (!Utils.isDynamicAllocationEnabled(sc.conf)) {
       doRequestTotalExecutors(initialExecutors)
+    }
+  }
+
+  private def setupAuth(): Unit = {
+    if (authEnabled) {
+      val baseSecret = new SecretBuilder()
+        .withNewMetadata()
+          .withName(kubernetesSecretName)
+          .withNamespace(kubernetesNamespace)
+          .endMetadata()
+        .withData(Map(SHUFFLE_SECRET_NAME ->
+          Base64.encodeBase64String(authSecret.getBytes(Charsets.UTF_8))).asJava)
+        .build()
+      kubernetesClient.secrets().create(baseSecret)
+      maybeShuffleService.foreach(service => {
+        if (service.daemonSetNamespace != kubernetesNamespace) {
+          val shuffleServiceNamespaceSecret = new SecretBuilder(baseSecret)
+            .editMetadata()
+              .withNamespace(service.daemonSetNamespace)
+              .endMetadata()
+            .build()
+          kubernetesClient
+            .secrets()
+            .inNamespace(service.daemonSetNamespace)
+            .create(shuffleServiceNamespaceSecret)
+        }
+      })
     }
   }
 
@@ -176,7 +200,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
     val executorId = UUID.randomUUID().toString.replaceAll("-", "")
     val name = s"exec$executorId"
     val selectors = Map(SPARK_EXECUTOR_SELECTOR -> executorId,
-      SPARK_APP_SELECTOR -> kubernetesAppId).asJava
+      SPARK_APP_SELECTOR -> applicationId()).asJava
     val executorMemoryQuantity = new QuantityBuilder(false)
       .withAmount(executorMemoryBytes.toString)
       .build()
@@ -202,12 +226,25 @@ private[spark] class KubernetesClusterSchedulerBackend(
       .build()
     requiredEnv += new EnvVarBuilder()
       .withName("SPARK_APPLICATION_ID")
-      .withValue(kubernetesAppId)
+      .withValue(applicationId())
       .build()
     requiredEnv += new EnvVarBuilder()
       .withName("SPARK_EXECUTOR_ID")
       .withValue(executorId)
       .build()
+    requiredEnv += new EnvVarBuilder()
+      .withName("SPARK_AUTH_ENABLED")
+      .withValue(authEnabled.toString)
+      .build()
+
+    if (authEnabled) {
+      requiredEnv += new EnvVarBuilder()
+        .withName(SecurityManager.ENV_AUTH_SECRET)
+        .withNewValueFrom()
+          .withNewSecretKeyRef(SHUFFLE_SECRET_NAME, kubernetesSecretName)
+          .endValueFrom()
+        .build()
+    }
 
     val shuffleServiceVolume = maybeShuffleService.map(service => {
       val shuffleServiceDaemonSet = getShuffleServiceDaemonSet(service)
@@ -269,7 +306,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
             val resolvedVolumeMounts = new ArrayBuffer[VolumeMount]
             resolvedVolumeMounts ++= container.getVolumeMounts.asScala
-            shuffleServiceVolume.map(volume => {
+            shuffleServiceVolume.foreach(volume => {
               resolvedVolumeMounts += new VolumeMountBuilder()
                 .withMountPath(volume.getHostPath.getPath)
                 .withName(volume.getName)
@@ -309,7 +346,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
           .withNewSpec()
             .withVolumes(shuffleServiceVolume.map(Seq(_)).getOrElse(Seq[Volume]()).asJava)
             .addNewContainer()
-              .withName(s"exec-$kubernetesAppId-container")
+              .withName(s"exec-${applicationId()}-container")
               .withImage(executorDockerImage)
               .withImagePullPolicy("IfNotPresent")
               .withVolumeMounts(shuffleServiceVolume.map(volume => {
@@ -386,13 +423,84 @@ private[spark] class KubernetesClusterSchedulerBackend(
     } catch {
       case e: Throwable => logError("Uncaught exception while shutting down driver service.", e)
     }
-
+    if (authEnabled) {
+      try {
+        kubernetesClient.secrets().withName(kubernetesSecretName).delete()
+      } catch {
+        case e: Throwable => logError("Uncaught exception while delete app secret.", e)
+      }
+      maybeShuffleService.foreach(service => {
+        try {
+          sendApplicationCompleteToShuffleService(service)
+        } catch {
+          case e: Throwable => logError("Uncaught exception while cleaning up" +
+            " shuffle service secret.", e)
+        }
+      })
+    }
     try {
       kubernetesClient.close()
     } catch {
       case e: Throwable => logError("Uncaught exception closing Kubernetes client.", e)
     }
     super.stop()
+  }
+
+  private def sendApplicationCompleteToShuffleService(
+      service: ShuffleServiceDaemonSetMetadata): Unit = {
+    if (service.daemonSetNamespace != kubernetesNamespace) {
+      logInfo("Sending application complete message to shuffle service.")
+      val serviceDaemonSet = kubernetesClient
+        .inNamespace(service.daemonSetNamespace)
+        .extensions()
+        .daemonSets()
+        .withName(service.daemonSetName)
+        .get
+      val podLabels = serviceDaemonSet.getSpec.getSelector.getMatchLabels
+      // An interesting note is that it would be preferable to put the shuffle service pods
+      // behind a K8s service and just query the service to pick a pod for us. Unfortunately,
+      // services wouldn't work well with SASL authentication, since SASL requires a series
+      // of exchanged messages to be sent between the pods, but repeated messages sent to the
+      // same service may resolve to different pods and corrupt the handshake process.
+      val shuffleServicePods = kubernetesClient
+        .inNamespace(service.daemonSetNamespace)
+        .pods()
+        .withLabels(podLabels)
+        .list()
+        .getItems
+        .asScala
+      val securityManager = sc.env.securityManager
+      val port = conf.getInt("spark.shuffle.service.port", 7337)
+      var success = false
+      val shuffleClient = new KubernetesExternalShuffleClient(
+          SparkTransportConf.fromSparkConf(conf, "shuffle"),
+          securityManager,
+          securityManager.isAuthenticationEnabled(),
+          securityManager.isSaslEncryptionEnabled())
+      try {
+        shuffleClient.init(applicationId())
+        for (pod <- shuffleServicePods) {
+          if (!success) {
+            val host = pod.getStatus.getPodIP
+            logInfo(s"Sending application complete message to $host")
+            try {
+              shuffleClient.sendApplicationComplete(host, port)
+              success = true
+              logInfo("Successfully sent application complete message.")
+            } catch {
+              case e: Throwable => logError(s"Failed to send application complete to" +
+                s" $host:$port. Will try another pod if possible.", e)
+            }
+          }
+        }
+      } finally {
+        shuffleClient.close()
+      }
+      if (!success) {
+        throw new IllegalStateException("Failed to send application complete" +
+          " message to any shuffle service pod.")
+      }
+    }
   }
 
   override def createDriverEndpoint(properties: Seq[(String, String)]): DriverEndpoint = {
@@ -415,33 +523,42 @@ private[spark] class KubernetesClusterSchedulerBackend(
         override def apply(v1: Any): Unit = {
           v1 match {
             case RetrieveSparkProps(executorId) =>
-              var resolvedProperties = sparkProperties
-              maybeShuffleService.foreach(service => {
-                // Refresh the pod so we get the status, particularly what host it's running on
-                val runningExecutorPod = kubernetesClient
-                  .pods()
-                  .withName(runningExecutorPods(executorId).getMetadata.getName)
-                  .get()
-                val shuffleServiceDaemonSet = kubernetesClient
-                  .extensions()
-                  .daemonSets()
-                  .inNamespace(service.daemonSetNamespace)
-                  .withName(service.daemonSetName)
-                  .get()
-                val shuffleServiceForPod = kubernetesClient
-                  .inNamespace(service.daemonSetNamespace)
-                  .pods()
-                  .inNamespace(service.daemonSetNamespace)
-                  .withLabels(shuffleServiceDaemonSet.getSpec.getSelector.getMatchLabels)
-                  .list()
-                  .getItems
-                  .asScala
-                  .filter(_.getStatus.getHostIP == runningExecutorPod.getStatus.getHostIP)
-                  .head
-                resolvedProperties = resolvedProperties ++ Seq(
-                  ("spark.shuffle.service.host", shuffleServiceForPod.getStatus.getPodIP))
-              })
-              context.reply(resolvedProperties)
+              EXECUTOR_MODIFICATION_LOCK.synchronized {
+                var resolvedProperties = sparkProperties
+                maybeShuffleService.foreach(service => {
+                  // Refresh the pod so we get the status, particularly what host it's running on
+                  val runningExecutorPod = kubernetesClient
+                    .pods()
+                    .withName(runningExecutorPods(executorId).getMetadata.getName)
+                    .get()
+                  val shuffleServiceDaemonSet = kubernetesClient
+                    .extensions()
+                    .daemonSets()
+                    .inNamespace(service.daemonSetNamespace)
+                    .withName(service.daemonSetName)
+                    .get()
+                  val shuffleServiceForPod = kubernetesClient
+                    .inNamespace(service.daemonSetNamespace)
+                    .pods()
+                    .inNamespace(service.daemonSetNamespace)
+                    .withLabels(shuffleServiceDaemonSet.getSpec.getSelector.getMatchLabels)
+                    .list()
+                    .getItems
+                    .asScala
+                    .filter(_.getStatus.getHostIP == runningExecutorPod.getStatus.getHostIP)
+                    .head
+                  resolvedProperties = resolvedProperties ++ Seq(
+                    ("spark.shuffle.service.host", shuffleServiceForPod.getStatus.getPodIP))
+                })
+                if (authEnabled) {
+                  // Don't pass the secret here, it's been set in the executor environment
+                  // already.
+                  resolvedProperties = resolvedProperties
+                    .filterNot(_._1 == "spark.authenticate.secret")
+                    .filterNot(_._1 == "spark.authenticate")
+                }
+                context.reply(resolvedProperties)
+              }
           }
         }
       }.orElse(super.receiveAndReply(context))
@@ -460,8 +577,6 @@ private[spark] class KubernetesClusterSchedulerBackend(
 }
 
 private object KubernetesClusterSchedulerBackend {
-  private val API_SERVER_TOKEN = new File("/var/run/secrets/kubernetes.io/serviceaccount/token")
-  private val CA_CERT_FILE = new File("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
   private val SPARK_EXECUTOR_SELECTOR = "spark-exec"
   private val SPARK_APP_SELECTOR = "spark-app"
   private val DEFAULT_STATIC_PORT = 10000
@@ -470,6 +585,7 @@ private object KubernetesClusterSchedulerBackend {
   private val EXECUTOR_PORT_NAME = "executor"
   private val MEMORY_OVERHEAD_FACTOR = 0.10
   private val MEMORY_OVERHEAD_MIN = 384L
+  private val SHUFFLE_SECRET_NAME = "spark-shuffle-secret"
 }
 
 private case class ShuffleServiceDaemonSetMetadata(

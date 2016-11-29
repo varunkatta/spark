@@ -31,7 +31,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{ShutdownHookManager, Utils}
 
 import scala.concurrent.{Future, ExecutionContext}
 
@@ -117,6 +117,14 @@ private[spark] class KubernetesDriverLauncherServiceImpl(
       }
     }
 
+    if (applicationConfiguration.sparkConf.getOrElse("spark.authenticate", "false").toBoolean) {
+      applicationConfiguration.sparkConf.get("spark.authenticate.secret") match {
+        case None =>
+          command += s"-Dspark.authenticate.secret=$expectedApplicationSecret"
+        case Some(_) => logInfo("Using user-provided secret.")
+      }
+    }
+
     if (applicationConfiguration.sparkConf.contains("spark.driver.memory")) {
       command += s"-Xmx${applicationConfiguration.sparkConf("spark.driver.memory")}"
     }
@@ -130,6 +138,10 @@ private[spark] class KubernetesDriverLauncherServiceImpl(
     pb.redirectError(Paths.get(sparkHome, "logs", "stderr").toFile)
     val process = pb.start()
     submitComplete = true
+    ShutdownHookManager.addShutdownHook(() => {
+      logInfo("Received stop command, shutting down the running Spark application...")
+      process.destroy()
+    })
     applicationCompleteFuture = Future[Unit] {
       try {
         process.waitFor()
