@@ -419,7 +419,7 @@ private[spark] class MesosClusterScheduler(
 
       val cmdExecutable = s"cd $folderBasename*; $prefixEnv bin/spark-submit"
       // Sandbox path points to the parent folder as we chdir into the folderBasename.
-      (cmdExecutable, "..")
+      (cmdExecutable, "src/main")
     } else {
       val executorSparkHome = desc.conf.getOption("spark.mesos.executor.home")
         .orElse(conf.getOption("spark.home"))
