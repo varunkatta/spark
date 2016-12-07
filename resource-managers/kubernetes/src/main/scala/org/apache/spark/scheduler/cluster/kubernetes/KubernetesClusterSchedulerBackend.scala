@@ -17,24 +17,23 @@
 
 package org.apache.spark.scheduler.cluster.kubernetes
 
-import collection.JavaConverters._
+import scala.collection.{concurrent, mutable}
+import scala.collection.JavaConverters._
+import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.Future
+import scala.util.Random
+
 import io.fabric8.kubernetes.api.model.{Pod, PodBuilder, PodFluent}
-import io.fabric8.kubernetes.api.model.extensions.JobBuilder
-import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClientException}
+import io.fabric8.kubernetes.client.DefaultKubernetesClient
+
+import org.apache.spark.{SparkConf, SparkContext, SparkException}
 import org.apache.spark.deploy.kubernetes.SparkJobResource
 import org.apache.spark.internal.config._
+import org.apache.spark.rpc.RpcEndpointAddress
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster._
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
-import org.apache.spark.{SparkConf, SparkContext, SparkException}
-import org.apache.spark.rpc.RpcEndpointAddress
-import org.apache.spark.scheduler.TaskSchedulerImpl
 import org.apache.spark.util.Utils
-
-import scala.collection.mutable.ArrayBuffer
-import scala.collection.{concurrent, mutable}
-import scala.util.Random
-import scala.concurrent.Future
 
 private[spark] class KubernetesClusterSchedulerBackend(
                                                         scheduler: TaskSchedulerImpl,

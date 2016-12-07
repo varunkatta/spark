@@ -19,23 +19,20 @@ package org.apache.spark.scheduler.cluster.kubernetes
 
 import java.io.File
 import java.util.Date
-import java.util.concurrent.atomic.AtomicLong
 
-import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient, KubernetesClientException}
-import io.fabric8.kubernetes.api.model.{Pod, PodBuilder, PodFluent, ServiceBuilder}
-import io.fabric8.kubernetes.client.dsl.LogWatch
-import org.apache.spark.deploy.Command
-import org.apache.spark.deploy.kubernetes.ClientArguments
-import org.apache.spark.{io, _}
-import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config._
-
-import collection.JavaConverters._
-import org.apache.spark.util.Utils
-
+import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
+import io.fabric8.kubernetes.api.model.{Pod, PodBuilder, PodFluent, ServiceBuilder}
+import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient, KubernetesClientException}
+
+import org.apache.spark.{SparkConf, SparkException}
+import org.apache.spark.deploy.Command
+import org.apache.spark.deploy.kubernetes.ClientArguments
+import org.apache.spark.internal.Logging
+import org.apache.spark.internal.config._
+import org.apache.spark.util.Utils
 
 private[spark] object KubernetesClusterScheduler {
   def defaultNameSpace: String = "default"
@@ -119,7 +116,7 @@ private[spark] class KubernetesClusterScheduler(conf: SparkConf)
       s"--conf=spark.executor.jar=$clientJarUri",
       s"--conf=spark.executor.instances=$instances",
       s"--conf=spark.kubernetes.namespace=$nameSpace",
-      s"--conf=spark.kubernetes.driver.image=$sparkDriverImage")
+      s"--conf=spark.kubernetes.sparkImage=$sparkDriverImage")
 
     if (conf.getBoolean("spark.dynamicAllocation.enabled", false)) {
       submitArgs ++= Vector(
