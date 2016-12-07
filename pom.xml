@@ -2595,7 +2595,7 @@
     <profile>
       <id>kubernetes</id>
       <modules>
-        <module>kubernetes</module>
+        <module>resource-managers/kubernetes</module>
       </modules>
     </profile>
 
