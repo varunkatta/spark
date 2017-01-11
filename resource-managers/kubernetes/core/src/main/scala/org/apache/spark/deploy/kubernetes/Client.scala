@@ -328,7 +328,8 @@ private[spark] class Client(
     HttpClientUtil.createClient[KubernetesSparkRestApi](
       uri = url,
       sslSocketFactory = sslContext.getSocketFactory,
-      trustContext = trustManager)
+      trustContext = trustManager,
+      token = k8ClientConfig.getOauthToken)
   }
 }
 

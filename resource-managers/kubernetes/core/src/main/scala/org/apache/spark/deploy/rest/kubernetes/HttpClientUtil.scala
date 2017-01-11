@@ -18,29 +18,45 @@ package org.apache.spark.deploy.rest.kubernetes
 
 import javax.net.ssl.{SSLContext, SSLSocketFactory, X509TrustManager}
 
+import scala.reflect.ClassTag
+
 import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import feign.Feign
 import feign.Request.Options
 import feign.jackson.{JacksonDecoder, JacksonEncoder}
 import feign.jaxrs.JAXRSContract
-import okhttp3.OkHttpClient
-import scala.reflect.ClassTag
+import okhttp3.{Interceptor, OkHttpClient, Response}
+import okhttp3.Interceptor.Chain
 
 import org.apache.spark.status.api.v1.JacksonMessageWriter
+
 
 private[spark] object HttpClientUtil {
 
   def createClient[T: ClassTag](
-      uri: String,
-      sslSocketFactory: SSLSocketFactory = SSLContext.getDefault.getSocketFactory,
-      trustContext: X509TrustManager = null,
-      readTimeoutMillis: Int = 20000,
-      connectTimeoutMillis: Int = 20000): T = {
+     uri: String,
+     sslSocketFactory: SSLSocketFactory = SSLContext.getDefault.getSocketFactory,
+     trustContext: X509TrustManager = null,
+     token: String,
+     readTimeoutMillis: Int = 20000,
+     connectTimeoutMillis: Int = 20000): T = {
     var httpClientBuilder = new OkHttpClient.Builder()
     Option.apply(trustContext).foreach(context => {
       httpClientBuilder = httpClientBuilder.sslSocketFactory(sslSocketFactory, context)
     })
+
+    httpClientBuilder.addInterceptor(new Interceptor() {
+      override def intercept(chain: Chain): Response = {
+        var original = chain.request()
+        var requestBuilder = original.newBuilder()
+          .addHeader("Authorization", s"Bearer ${token}")
+
+        var request = requestBuilder.build()
+        return chain.proceed(request)
+      }
+    })
+
     val objectMapper = new ObjectMapper()
       .registerModule(new DefaultScalaModule)
       .setDateFormat(JacksonMessageWriter.makeISODateFormat)
