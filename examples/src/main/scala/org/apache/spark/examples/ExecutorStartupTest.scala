@@ -29,7 +29,7 @@ import org.apache.spark.sql.SparkSession
 object ExecutorStartupTest {
   def main(args: Array[String]) {
     val spark = SparkSession
-      .builder
+      .builder()
       .appName("ExecutorStartupTest")
       .getOrCreate()
 
