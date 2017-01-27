@@ -26,7 +26,7 @@ import com.google.common.base.Charsets
 import com.google.common.io.Files
 import com.google.common.util.concurrent.SettableFuture
 import io.fabric8.kubernetes.api.model._
-import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient, KubernetesClientException, Watcher}
+import io.fabric8.kubernetes.client.{ConfigBuilder => K8SConfigBuilder, _}
 import io.fabric8.kubernetes.client.Watcher.Action
 import org.apache.commons.codec.binary.Base64
 import scala.collection.JavaConverters._
@@ -37,7 +37,7 @@ import scala.concurrent.duration.DurationInt
 import org.apache.spark.{SecurityManager, SparkConf, SparkException, SSLOptions}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
-import org.apache.spark.deploy.rest.{AppResource, ContainerAppResource, KubernetesCreateSubmissionRequest, RemoteAppResource, TarGzippedData, UploadedAppResource}
+import org.apache.spark.deploy.rest._
 import org.apache.spark.deploy.rest.kubernetes._
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.{ThreadUtils, Utils}
@@ -49,8 +49,8 @@ private[spark] class Client(
     appArgs: Array[String]) extends Logging {
   import Client._
 
-  private val namespace = sparkConf.get(KUBERNETES_NAMESPACE)
-  private val master = resolveK8sMaster(sparkConf.get("spark.master"))
+  private val namespace: Option[String] = sparkConf.get(KUBERNETES_NAMESPACE)
+  private val master: Option[String] = resolveK8sMaster(sparkConf.get("spark.master"))
 
   private val launchTime = System.currentTimeMillis
   private val appName = sparkConf.getOption("spark.app.name")
@@ -81,10 +81,16 @@ private[spark] class Client(
   def run(): Unit = {
     val (driverSubmitSslOptions, isKeyStoreLocalFile) = parseDriverSubmitSslOptions()
     val parsedCustomLabels = parseCustomLabels(customLabels)
-    var k8ConfBuilder = new ConfigBuilder()
+    var k8ConfBuilder = new K8SConfigBuilder()
       .withApiVersion("v1")
-      .withMasterUrl(master)
-      .withNamespace(namespace)
+
+    master.foreach { m =>
+      k8ConfBuilder = k8ConfBuilder.withMasterUrl(m)
+    }
+    namespace.foreach { nm =>
+      k8ConfBuilder = k8ConfBuilder.withNamespace(nm)
+    }
+
     sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
     }
@@ -115,18 +121,10 @@ private[spark] class Client(
           ++ parsedCustomLabels).asJava
         val containerPorts = buildContainerPorts()
         val submitCompletedFuture = SettableFuture.create[Boolean]
-        val submitPending = new AtomicBoolean(false)
-        val podWatcher = new DriverPodWatcher(
-          submitCompletedFuture,
-          submitPending,
-          kubernetesClient,
-          driverSubmitSslOptions,
-          Array(submitServerSecret) ++ sslSecrets,
-          driverKubernetesSelectors)
-        Utils.tryWithResource(kubernetesClient
-            .pods()
-            .withLabels(driverKubernetesSelectors)
-            .watch(podWatcher)) { _ =>
+
+        val secretDirectory = s"$DRIVER_CONTAINER_SECRETS_BASE_DIR/$kubernetesAppId"
+
+        def createDriverPod(unused: Watch): Unit = {
           kubernetesClient.pods().createNew()
             .withNewMetadata()
               .withName(kubernetesAppId)
@@ -627,19 +625,28 @@ private[spark] object Client extends Logging {
       appArgs = appArgs).run()
   }
 
-  def resolveK8sMaster(rawMasterString: String): String = {
+  /**
+   * @return a String URL if specified by the master URL, or empty if the client default is
+   *         specified using k8s
+   * @throws IllegalArgumentException for master strings not k8s or starting with k8s://
+   */
+  private def resolveK8sMaster(rawMasterString: String): Option[String] = {
+    if (rawMasterString.equals("k8s")) {
+      return Option.empty
+    }
     if (!rawMasterString.startsWith("k8s://")) {
-      throw new IllegalArgumentException("Master URL should start with k8s:// in Kubernetes mode.")
+      throw new IllegalArgumentException("Master URL should be k8s or start with k8s:// in " +
+        "Kubernetes mode.")
     }
     val masterWithoutK8sPrefix = rawMasterString.replaceFirst("k8s://", "")
     if (masterWithoutK8sPrefix.startsWith("http://")
         || masterWithoutK8sPrefix.startsWith("https://")) {
-      masterWithoutK8sPrefix
+      Option.apply(masterWithoutK8sPrefix)
     } else {
       val resolvedURL = s"https://$masterWithoutK8sPrefix"
       logDebug(s"No scheme specified for kubernetes master URL, so defaulting to https. Resolved" +
         s" URL is $resolvedURL")
-      resolvedURL
+      Option.apply(resolvedURL)
     }
   }
 }
