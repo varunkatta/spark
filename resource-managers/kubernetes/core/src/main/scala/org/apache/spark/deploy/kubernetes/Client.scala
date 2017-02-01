@@ -622,27 +622,26 @@ private[spark] object Client extends Logging {
   }
 
   /**
-   * @return a String URL if specified by the master URL, or empty if the client default is
+   * @return a String URL if specified by the master URL, or None if the client default is
    *         specified using k8s
    * @throws IllegalArgumentException for master strings not k8s or starting with k8s://
    */
   private def resolveK8sMaster(rawMasterString: String): Option[String] = {
-    if (rawMasterString.equals("k8s")) {
-      return Option.empty
-    }
-    if (!rawMasterString.startsWith("k8s://")) {
-      throw new IllegalArgumentException("Master URL should be k8s or start with k8s:// in " +
-        "Kubernetes mode.")
-    }
-    val masterWithoutK8sPrefix = rawMasterString.replaceFirst("k8s://", "")
-    if (masterWithoutK8sPrefix.startsWith("http://")
-        || masterWithoutK8sPrefix.startsWith("https://")) {
-      Option.apply(masterWithoutK8sPrefix)
-    } else {
-      val resolvedURL = s"https://$masterWithoutK8sPrefix"
-      logDebug(s"No scheme specified for kubernetes master URL, so defaulting to https. Resolved" +
-        s" URL is $resolvedURL")
-      Option.apply(resolvedURL)
+    rawMasterString match {
+      case "k8s" =>
+        logDebug("No kubernetes master URL specified, so falling back to client defaults...")
+        None
+      case master if master.startsWith("k8s://") => master.replaceFirst("k8s://", "") match {
+        case url if url.startsWith("http://") => Some(url)
+        case url if url.startsWith("https://") => Some(url)
+        case hostPort =>
+          val resolvedURL = s"https://$hostPort"
+          logDebug("No scheme specified for kubernetes master URL, so defaulting to https. " +
+            s"Resolved URL is $resolvedURL")
+          Some(resolvedURL)
+      }
+      case _ => throw new IllegalArgumentException("Master URL should be k8s or start with " +
+        "k8s:// in Kubernetes mode.")
     }
   }
 }
