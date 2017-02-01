@@ -84,9 +84,11 @@ private[spark] class Client(
     resolveK8sMaster(sparkConf.get("spark.master")).foreach { m =>
       k8ConfBuilder = k8ConfBuilder.withMasterUrl(m)
     }
-    sparkConf.get(KUBERNETES_NAMESPACE).foreach { nm =>
-      k8ConfBuilder = k8ConfBuilder.withNamespace(nm)
+
+    sparkConf.get(KUBERNETES_NAMESPACE).foreach { ns =>
+      k8ConfBuilder = k8ConfBuilder.withNamespace(ns)
     }
+
     sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach { f =>
       k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
     }
@@ -98,6 +100,11 @@ private[spark] class Client(
     }
 
     val k8ClientConfig = k8ConfBuilder.build
+
+    // save into SparkConf so the submitter's default settings are sent to the driver
+    sparkConf.setIfMissing("spark.master", k8ConfBuilder.getMasterUrl())
+    sparkConf.setIfMissing(KUBERNETES_NAMESPACE, k8ConfBuilder.getNamespace())
+
     Utils.tryWithResource(new DefaultKubernetesClient(k8ClientConfig)) { kubernetesClient =>
       val submitServerSecret = kubernetesClient.secrets().createNew()
         .withNewMetadata()
@@ -626,7 +633,7 @@ private[spark] object Client extends Logging {
    *         specified using k8s
    * @throws IllegalArgumentException for master strings not k8s or starting with k8s://
    */
-  private def resolveK8sMaster(rawMasterString: String): Option[String] = {
+  def resolveK8sMaster(rawMasterString: String): Option[String] = {
     rawMasterString match {
       case "k8s" =>
         logDebug("No kubernetes master URL specified, so falling back to client defaults...")
