@@ -49,9 +49,6 @@ private[spark] class Client(
     appArgs: Array[String]) extends Logging {
   import Client._
 
-  private val namespace: Option[String] = sparkConf.get(KUBERNETES_NAMESPACE)
-  private val master: Option[String] = resolveK8sMaster(sparkConf.get("spark.master"))
-
   private val launchTime = System.currentTimeMillis
   private val appName = sparkConf.getOption("spark.app.name")
     .getOrElse("spark")
@@ -84,21 +81,20 @@ private[spark] class Client(
     var k8ConfBuilder = new K8SConfigBuilder()
       .withApiVersion("v1")
 
-    master.foreach { m =>
+    resolveK8sMaster(sparkConf.get("spark.master")).foreach { m =>
       k8ConfBuilder = k8ConfBuilder.withMasterUrl(m)
     }
-    namespace.foreach { nm =>
+    sparkConf.get(KUBERNETES_NAMESPACE).foreach { nm =>
       k8ConfBuilder = k8ConfBuilder.withNamespace(nm)
     }
-
-    sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach {
-      f => k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
+    sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach { f =>
+      k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
     }
-    sparkConf.get(KUBERNETES_CLIENT_KEY_FILE).foreach {
-      f => k8ConfBuilder = k8ConfBuilder.withClientKeyFile(f)
+    sparkConf.get(KUBERNETES_CLIENT_KEY_FILE).foreach { f =>
+      k8ConfBuilder = k8ConfBuilder.withClientKeyFile(f)
     }
-    sparkConf.get(KUBERNETES_CLIENT_CERT_FILE).foreach {
-      f => k8ConfBuilder = k8ConfBuilder.withClientCertFile(f)
+    sparkConf.get(KUBERNETES_CLIENT_CERT_FILE).foreach { f =>
+      k8ConfBuilder = k8ConfBuilder.withClientCertFile(f)
     }
 
     val k8ClientConfig = k8ConfBuilder.build
