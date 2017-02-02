@@ -66,6 +66,9 @@ private[spark] class Client(
   uploadedFiles.foreach(validateNoDuplicateUploadFileNames)
   private val uiPort = sparkConf.getInt("spark.ui.port", DEFAULT_UI_PORT)
   private val driverSubmitTimeoutSecs = sparkConf.get(KUBERNETES_DRIVER_SUBMIT_TIMEOUT)
+  private val serviceAccount = sparkConf.get(KUBERNETES_SERVICE_ACCOUNT_NAME)
+  private val customLabels = sparkConf.get(KUBERNETES_DRIVER_LABELS)
+  private val customPorts = sparkConf.get(KUBERNETES_DRIVER_POD_PORTS)
 
   private val secretBase64String = {
     val secretBytes = new Array[Byte](128)
@@ -73,8 +76,6 @@ private[spark] class Client(
     Base64.encodeBase64String(secretBytes)
   }
 
-  private val serviceAccount = sparkConf.get(KUBERNETES_SERVICE_ACCOUNT_NAME)
-  private val customLabels = sparkConf.get(KUBERNETES_DRIVER_LABELS)
 
   private implicit val retryableExecutionContext = ExecutionContext
     .fromExecutorService(
@@ -83,6 +84,7 @@ private[spark] class Client(
   def run(): Unit = {
     val (driverSubmitSslOptions, isKeyStoreLocalFile) = parseDriverSubmitSslOptions()
     val parsedCustomLabels = parseCustomLabels(customLabels)
+    val parsedCustomPorts = parseCustomPorts(customPorts)
     var k8ConfBuilder = new ConfigBuilder()
       .withApiVersion("v1")
       .withMasterUrl(master)
@@ -115,7 +117,7 @@ private[spark] class Client(
             SPARK_APP_ID_LABEL -> kubernetesAppId,
             SPARK_APP_NAME_LABEL -> appName)
           ++ parsedCustomLabels).asJava
-        val containerPorts = buildContainerPorts()
+        val containerPorts = buildContainerPorts(parsedCustomPorts)
         val submitCompletedFuture = SettableFuture.create[Boolean]
         val submitPending = new AtomicBoolean(false)
         val podWatcher = new DriverPodWatcher(
@@ -489,7 +491,7 @@ private[spark] class Client(
       s"$podStatusMessage\n\n$failedDriverContainerStatusString"
   }
 
-  private def buildContainerPorts(): Seq[ContainerPort] = {
+  private def buildContainerPorts(additionalPorts: Seq[Int]): Seq[ContainerPort] = {
     Seq((DRIVER_PORT_NAME, sparkConf.getInt("spark.driver.port", DEFAULT_DRIVER_PORT)),
       (BLOCK_MANAGER_PORT_NAME,
         sparkConf.getInt("spark.blockManager.port", DEFAULT_BLOCKMANAGER_PORT)),
@@ -497,7 +499,8 @@ private[spark] class Client(
       (UI_PORT_NAME, uiPort)).map(port => new ContainerPortBuilder()
         .withName(port._1)
         .withContainerPort(port._2)
-        .build())
+        .build()) ++
+      additionalPorts.map(new ContainerPortBuilder().withContainerPort(_).build())
   }
 
   private def buildSubmissionRequest(): KubernetesCreateSubmissionRequest = {
@@ -629,6 +632,12 @@ private[spark] class Client(
         }
       }).toMap
     }).getOrElse(Map.empty[String, String])
+  }
+
+  private def parseCustomPorts(maybePorts: Option[String]): Seq[Int] = {
+    maybePorts.map(ports => {
+      ports.split(",").map(_.trim).filterNot(_.isEmpty).map(_.toInt).toSeq
+    }).getOrElse(Seq[Int]())
   }
 }
 
