@@ -292,7 +292,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       "--conf", "spark.kubernetes.executor.docker.image=spark-executor:latest",
       "--conf", "spark.kubernetes.driver.docker.image=spark-driver:latest",
       "--conf", "spark.kubernetes.driver.labels=label1=label1value,label2=label2value",
-      "--conf", "spark.kubernetes.driver.ports=9090,9091",
+      "--conf", "spark.kubernetes.driver.additionalPorts=9090,9091",
       EXAMPLES_JAR)
     SparkSubmit.main(args)
     val driverPod = minikubeKubernetesClient

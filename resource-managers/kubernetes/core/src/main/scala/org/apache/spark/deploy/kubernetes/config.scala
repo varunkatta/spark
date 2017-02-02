@@ -143,7 +143,7 @@ package object config {
       .createOptional
 
   private[spark] val KUBERNETES_DRIVER_POD_PORTS =
-    ConfigBuilder("spark.kubernetes.driver.ports")
+    ConfigBuilder("spark.kubernetes.driver.additionalPorts")
       .doc("""
              | Custom ports that will be opened on the driver pod.
              | This should be a comma-separated list of port numbers.
