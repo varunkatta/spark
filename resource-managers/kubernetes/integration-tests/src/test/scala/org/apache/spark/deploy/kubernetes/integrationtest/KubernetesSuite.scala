@@ -295,12 +295,8 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       "--conf", "spark.kubernetes.executor.docker.image=spark-executor:latest",
       "--conf", "spark.kubernetes.driver.docker.image=spark-driver:latest",
       "--conf", "spark.kubernetes.driver.labels=label1=label1value,label2=label2value",
-<<<<<<< HEAD
       "--conf", "spark.kubernetes.driver.additionalPorts=9090,9091",
-||||||| merged common ancestors
-=======
       "--conf", "spark.kubernetes.submit.waitAppCompletion=false",
->>>>>>> apache-spark-on-k8s/k8s-support-alternate-incremental
       EXAMPLES_JAR)
     SparkSubmit.main(args)
     val driverPod = minikubeKubernetesClient

@@ -88,14 +88,8 @@ private[spark] class Client(
     val (driverSubmitSslOptions, isKeyStoreLocalFile) = parseDriverSubmitSslOptions()
 
     val parsedCustomLabels = parseCustomLabels(customLabels)
-<<<<<<< HEAD
     val parsedCustomPorts = parseCustomPorts(customPorts)
-    var k8ConfBuilder = new ConfigBuilder()
-||||||| merged common ancestors
-    var k8ConfBuilder = new ConfigBuilder()
-=======
     var k8ConfBuilder = new K8SConfigBuilder()
->>>>>>> apache-spark-on-k8s/k8s-support-alternate-incremental
       .withApiVersion("v1")
       .withMasterUrl(master)
       .withNamespace(namespace)
@@ -127,38 +121,13 @@ private[spark] class Client(
             SPARK_APP_ID_LABEL -> kubernetesAppId,
             SPARK_APP_NAME_LABEL -> appName)
           ++ parsedCustomLabels).asJava
-<<<<<<< HEAD
         val containerPorts = buildContainerPorts(parsedCustomPorts)
-        val submitCompletedFuture = SettableFuture.create[Boolean]
-        val submitPending = new AtomicBoolean(false)
-        val podWatcher = new DriverPodWatcher(
-          submitCompletedFuture,
-          submitPending,
-          kubernetesClient,
-          driverSubmitSslOptions,
-          Array(submitServerSecret) ++ sslSecrets,
-          driverKubernetesSelectors)
-||||||| merged common ancestors
-        val containerPorts = buildContainerPorts()
-        val submitCompletedFuture = SettableFuture.create[Boolean]
-        val submitPending = new AtomicBoolean(false)
-        val podWatcher = new DriverPodWatcher(
-          submitCompletedFuture,
-          submitPending,
-          kubernetesClient,
-          driverSubmitSslOptions,
-          Array(submitServerSecret) ++ sslSecrets,
-          driverKubernetesSelectors)
-=======
-        val containerPorts = buildContainerPorts()
-
         // start outer watch for status logging of driver pod
         val driverPodCompletedLatch = new CountDownLatch(1)
         // only enable interval logging if in waitForAppCompletion mode
         val loggingInterval = if (waitForAppCompletion) sparkConf.get(REPORT_INTERVAL) else 0
         val loggingWatch = new LoggingPodStatusWatcher(driverPodCompletedLatch, kubernetesAppId,
                                                        loggingInterval)
->>>>>>> apache-spark-on-k8s/k8s-support-alternate-incremental
         Utils.tryWithResource(kubernetesClient
             .pods()
             .withLabels(driverKubernetesSelectors)
