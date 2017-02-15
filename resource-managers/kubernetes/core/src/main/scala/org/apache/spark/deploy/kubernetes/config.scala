@@ -214,7 +214,8 @@ package object config {
         """
           | When initially contacting the driver, use an Ingress when the submitting client
           | passes application dependencies to the driver pod. The Ingress also remains and
-          | exposes the Spark UI.
+          | exposes the Spark UI. This requires an Ingress controller must be installed on
+          | the cluster.
         """.stripMargin
       )
       .booleanConf
