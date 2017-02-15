@@ -116,6 +116,7 @@ private[spark] class Client(
 
     val k8ClientConfig = k8ConfBuilder.build
     Utils.tryWithResource(new DefaultKubernetesClient(k8ClientConfig)) { kubernetesClient =>
+      val kubernetesComponentCleaner = new KubernetesComponentCleaner(kubernetesClient)
       val submitServerSecret = kubernetesClient.secrets().createNew()
         .withNewMetadata()
           .withName(secretName)
@@ -123,100 +124,74 @@ private[spark] class Client(
         .withData(Map((SUBMISSION_APP_SECRET_NAME, secretBase64String)).asJava)
         .withType("Opaque")
         .done()
+      kubernetesComponentCleaner.registerOrUpdateSecret(submitServerSecret)
       try {
-        val (sslEnvs, sslVolumes, sslVolumeMounts, sslSecrets) = configureSsl(kubernetesClient,
+        val (sslEnvs, sslVolumes, sslVolumeMounts, sslSecrets) = configureSsl(
+          kubernetesClient,
+          kubernetesComponentCleaner,
           driverSubmitSslOptions,
           isKeyStoreLocalFile)
-        try {
-          // start outer watch for status logging of driver pod
-          val driverPodCompletedLatch = new CountDownLatch(1)
-          // only enable interval logging if in waitForAppCompletion mode
-          val loggingInterval = if (waitForAppCompletion) sparkConf.get(REPORT_INTERVAL) else 0
-          val loggingWatch = new LoggingPodStatusWatcher(driverPodCompletedLatch, kubernetesAppId,
-            loggingInterval)
-          Utils.tryWithResource(kubernetesClient
-              .pods()
-              .withName(kubernetesAppId)
-              .watch(loggingWatch)) { _ =>
-            val (driverPod, driverService, driverIngress) = launchDriverKubernetesComponents(
-              kubernetesClient,
-              parsedCustomLabels,
-              submitServerSecret,
-              driverSubmitSslOptions,
-              sslSecrets,
-              sslVolumes,
-              sslVolumeMounts,
-              sslEnvs,
-              isKeyStoreLocalFile)
-            val (ownerReferenceConfiguredDriverService,
-                ownerReferenceConfiguredDriverIngress) = try {
-              configureOwnerReferences(
-                kubernetesClient,
-                submitServerSecret,
-                sslSecrets,
-                driverPod,
-                driverService,
-                driverIngress)
-            } catch {
-              case e: Throwable =>
-                cleanupAllDriverComponents(kubernetesClient, driverPod, driverService,
-                  driverIngress)
-                throw new SparkException("Failed to set owner references to the driver pod.", e)
-            }
-            try {
-              submitApplicationToDriverServer(kubernetesClient, driverSubmitSslOptions,
-                ownerReferenceConfiguredDriverService, submitterLocalFiles, submitterLocalJars)
-              // wait if configured to do so
-              if (waitForAppCompletion) {
-                logInfo(s"Waiting for application $kubernetesAppId to finish...")
-                driverPodCompletedLatch.await()
-                logInfo(s"Application $kubernetesAppId finished.")
-              } else {
-                logInfo(s"Application $kubernetesAppId successfully launched.")
-              }
-            } catch {
-              case e: Throwable =>
-                cleanupAllDriverComponents(kubernetesClient, driverPod,
-                  ownerReferenceConfiguredDriverService,
-                  ownerReferenceConfiguredDriverIngress)
-                throw new SparkException("Failed to submit the application to the driver pod.", e)
-            }
-          }
-        } finally {
-          Utils.tryLogNonFatalError {
-            // Secrets may have been mutated so delete by name to avoid problems with not having
-            // the latest version.
-            sslSecrets.foreach { secret =>
-              kubernetesClient.secrets().withName(secret.getMetadata.getName).delete()
-            }
+        sslSecrets.foreach(kubernetesComponentCleaner.registerOrUpdateSecret)
+        // start outer watch for status logging of driver pod
+        val driverPodCompletedLatch = new CountDownLatch(1)
+        // only enable interval logging if in waitForAppCompletion mode
+        val loggingInterval = if (waitForAppCompletion) sparkConf.get(REPORT_INTERVAL) else 0
+        val loggingWatch = new LoggingPodStatusWatcher(driverPodCompletedLatch, kubernetesAppId,
+          loggingInterval)
+        Utils.tryWithResource(kubernetesClient
+            .pods()
+            .withName(kubernetesAppId)
+            .watch(loggingWatch)) { _ =>
+          val (driverPod, driverService, driverIngress) = launchDriverKubernetesComponents(
+            kubernetesClient,
+            kubernetesComponentCleaner,
+            parsedCustomLabels,
+            submitServerSecret,
+            driverSubmitSslOptions,
+            sslSecrets,
+            sslVolumes,
+            sslVolumeMounts,
+            sslEnvs,
+            isKeyStoreLocalFile)
+          configureOwnerReferences(
+            kubernetesClient,
+            kubernetesComponentCleaner,
+            submitServerSecret,
+            sslSecrets,
+            driverPod,
+            driverService,
+            driverIngress)
+          submitApplicationToDriverServer(
+            kubernetesClient,
+            kubernetesComponentCleaner,
+            driverSubmitSslOptions,
+            driverService,
+            submitterLocalFiles,
+            submitterLocalJars)
+          // Now that the application has started, persist the components that were created beyond
+          // the shutdown hook. We still want to purge the one-time secrets, so do not unregister
+          // those.
+          kubernetesComponentCleaner.unregisterPod(driverPod)
+          kubernetesComponentCleaner.unregisterService(driverService)
+          driverIngress.foreach(kubernetesComponentCleaner.unregisterIngress)
+          // wait if configured to do so
+          if (waitForAppCompletion) {
+            logInfo(s"Waiting for application $kubernetesAppId to finish...")
+            driverPodCompletedLatch.await()
+            logInfo(s"Application $kubernetesAppId finished.")
+          } else {
+            logInfo(s"Application $kubernetesAppId successfully launched.")
           }
         }
       } finally {
-        Utils.tryLogNonFatalError {
-          kubernetesClient.secrets().withName(submitServerSecret.getMetadata.getName).delete()
-        }
+        kubernetesComponentCleaner.purgeAllRegisteredComponentsFromKubernetes()
       }
-    }
-  }
-
-  private def cleanupAllDriverComponents(
-      kubernetesClient: KubernetesClient,
-      driverPod: Pod,
-      driverService: Service,
-      driverIngress: Option[Ingress]): Unit = {
-    Utils.tryLogNonFatalError {
-      kubernetesClient.services().delete(driverService)
-    }
-    Utils.tryLogNonFatalError {
-      kubernetesClient.pods().delete(driverPod)
-    }
-    Utils.tryLogNonFatalError {
-      driverIngress.foreach(kubernetesClient.extensions().ingresses().delete(_))
     }
   }
 
   private def submitApplicationToDriverServer(
       kubernetesClient: KubernetesClient,
+      kubernetesComponentCleaner: KubernetesComponentCleaner,
       driverSubmitSslOptions: SSLOptions,
       driverService: Service,
       submitterLocalFiles: Iterable[String],
@@ -250,16 +225,22 @@ private[spark] class Client(
       .withPort(uiPort)
       .withNewTargetPort(uiPort)
       .build()
-    kubernetesClient.services().withName(kubernetesAppId).edit().editSpec()
-      .withType("ClusterIP")
-      .withPorts(uiServicePort)
-      .endSpec()
-      .done()
+    val clusterIPService = kubernetesClient
+      .services()
+      .withName(kubernetesAppId)
+      .edit()
+        .editSpec()
+          .withType("ClusterIP")
+          .withPorts(uiServicePort)
+          .endSpec()
+        .done()
+    kubernetesComponentCleaner.registerOrUpdateService(clusterIPService)
     logInfo("Finished submitting application to Kubernetes.")
   }
 
   private def launchDriverKubernetesComponents(
       kubernetesClient: KubernetesClient,
+      kubernetesComponentsCleaner: KubernetesComponentCleaner,
       parsedCustomLabels: Map[String, String],
       submitServerSecret: Secret,
       driverSubmitSslOptions: SSLOptions,
@@ -267,7 +248,7 @@ private[spark] class Client(
       sslVolumes: Array[Volume],
       sslVolumeMounts: Array[VolumeMount],
       sslEnvs: Array[EnvVar],
-      isKeyStoreLocalFile: Boolean): (Pod, Service, Option[Ingress]) = {
+      isKeyStoreLocalFile: Boolean) = {
     val driverKubernetesSelectors = (Map(
       SPARK_DRIVER_LABEL -> kubernetesAppId,
       SPARK_APP_ID_LABEL -> kubernetesAppId,
@@ -303,45 +284,24 @@ private[spark] class Client(
               kubernetesClient,
               driverKubernetesSelectors,
               submitServerSecret)
-            val driverPod = try {
-              createDriverPod(
+            kubernetesComponentsCleaner.registerOrUpdateService(driverService)
+            val driverPod = createDriverPod(
+              kubernetesClient,
+              driverKubernetesSelectors,
+              submitServerSecret,
+              driverSubmitSslOptions,
+              sslVolumes,
+              sslVolumeMounts,
+              sslEnvs)
+            kubernetesComponentsCleaner.registerOrUpdatePod(driverPod)
+            val driverIngress = createDriverIngress(
                 kubernetesClient,
                 driverKubernetesSelectors,
-                submitServerSecret,
-                driverSubmitSslOptions,
-                sslVolumes,
-                sslVolumeMounts,
-                sslEnvs)
-            } catch {
-              case e: Throwable =>
-                Utils.tryLogNonFatalError {
-                  kubernetesClient.services().delete(driverService)
-                }
-                throw new SparkException("Failed to create the driver pod.", e)
-            }
-            val driverIngress = try {
-              createDriverIngress(kubernetesClient, driverKubernetesSelectors, driverService)
-            } catch {
-              case e: Throwable =>
-                Utils.tryLogNonFatalError {
-                  kubernetesClient.services().delete(driverService)
-                }
-                Utils.tryLogNonFatalError {
-                  kubernetesClient.pods().delete(driverPod)
-                }
-                throw new SparkException("Failed to create the driver ingress.", e)
-            }
-            try {
-              waitForReadyKubernetesComponents(kubernetesClient, endpointsReadyFuture,
-                serviceReadyFuture, podReadyFuture, ingressReadyFuture)
-              (driverPod, driverService, driverIngress)
-            } catch {
-              case e: Throwable =>
-                cleanupAllDriverComponents(kubernetesClient, driverPod, driverService,
-                  driverIngress)
-                throw new SparkException("Timed out while waiting for a Kubernetes component to" +
-                  " be ready.", e)
-            }
+                driverService)
+            driverIngress.foreach(kubernetesComponentsCleaner.registerOrUpdateIngress)
+            waitForReadyKubernetesComponents(kubernetesClient, endpointsReadyFuture,
+              serviceReadyFuture, podReadyFuture, ingressReadyFuture)
+            (driverPod, driverService, driverIngress)
           }
         }
       }
@@ -356,6 +316,7 @@ private[spark] class Client(
    */
   private def configureOwnerReferences(
       kubernetesClient: KubernetesClient,
+      kubernetesComponentCleaner: KubernetesComponentCleaner,
       submitServerSecret: Secret,
       sslSecrets: Array[Secret],
       driverPod: Pod,
@@ -369,17 +330,22 @@ private[spark] class Client(
       .withController(true)
       .build()
     sslSecrets.foreach(secret => {
-      kubernetesClient.secrets().withName(secret.getMetadata.getName).edit()
+      val updatedSecret = kubernetesClient.secrets().withName(secret.getMetadata.getName).edit()
         .editMetadata()
         .addToOwnerReferences(driverPodOwnerRef)
         .endMetadata()
         .done()
+      kubernetesComponentCleaner.registerOrUpdateSecret(updatedSecret)
     })
-    kubernetesClient.secrets().withName(submitServerSecret.getMetadata.getName).edit()
-      .editMetadata()
-      .addToOwnerReferences(driverPodOwnerRef)
-      .endMetadata()
-      .done()
+    val updatedSubmitServerSecret = kubernetesClient
+      .secrets()
+      .withName(submitServerSecret.getMetadata.getName)
+      .edit()
+        .editMetadata()
+          .addToOwnerReferences(driverPodOwnerRef)
+          .endMetadata()
+        .done()
+    kubernetesComponentCleaner.registerOrUpdateSecret(updatedSubmitServerSecret)
     val updatedService = kubernetesClient
       .services()
       .withName(driverService.getMetadata.getName)
@@ -388,6 +354,7 @@ private[spark] class Client(
           .addToOwnerReferences(driverPodOwnerRef)
           .endMetadata()
         .done()
+    kubernetesComponentCleaner.registerOrUpdateService(updatedService)
     val updatedIngress = driverIngress.map { ingress =>
       kubernetesClient.extensions().ingresses().withName(ingress.getMetadata.getName).edit()
         .editMetadata()
@@ -395,6 +362,7 @@ private[spark] class Client(
           .endMetadata()
         .done()
     }
+    updatedIngress.foreach(kubernetesComponentCleaner.registerOrUpdateIngress)
     (updatedService, updatedIngress)
   }
 
@@ -645,9 +613,12 @@ private[spark] class Client(
     (securityManager.getSSLOptions(KUBERNETES_SUBMIT_SSL_NAMESPACE), isLocalKeyStore)
   }
 
-  private def configureSsl(kubernetesClient: KubernetesClient, driverSubmitSslOptions: SSLOptions,
-        isKeyStoreLocalFile: Boolean):
-        (Array[EnvVar], Array[Volume], Array[VolumeMount], Array[Secret]) = {
+  private def configureSsl(
+      kubernetesClient: KubernetesClient,
+      kubernetesComponentCleaner: KubernetesComponentCleaner,
+      driverSubmitSslOptions: SSLOptions,
+      isKeyStoreLocalFile: Boolean):
+      (Array[EnvVar], Array[Volume], Array[VolumeMount], Array[Secret]) = {
     if (driverSubmitSslOptions.enabled) {
       val sslSecretsMap = mutable.HashMap[String, String]()
       val sslEnvs = mutable.Buffer[EnvVar]()
@@ -714,6 +685,7 @@ private[spark] class Client(
         .withData(sslSecretsMap.asJava)
         .withType("Opaque")
         .done()
+      kubernetesComponentCleaner.registerOrUpdateSecret(sslSecrets)
       secrets += sslSecrets
       (sslEnvs.toArray, Array(sslVolume), Array(sslVolumeMount), secrets.toArray)
     } else {
