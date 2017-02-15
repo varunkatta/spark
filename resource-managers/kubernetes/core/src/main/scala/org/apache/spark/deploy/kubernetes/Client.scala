@@ -439,7 +439,7 @@ private[spark] class Client(
       driverSubmitSslOptions: SSLOptions,
       sslVolumes: Array[Volume],
       sslVolumeMounts: Array[VolumeMount],
-      sslEnvs: Array[EnvVar]) = {
+      sslEnvs: Array[EnvVar]): Pod = {
     val containerPorts = buildContainerPorts()
     val probePingHttpGet = new HTTPGetActionBuilder()
       .withScheme(if (driverSubmitSslOptions.enabled) "HTTPS" else "HTTP")
