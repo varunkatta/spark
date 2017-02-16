@@ -282,8 +282,8 @@ from the other deployment modes. See the [configuration page](configuration.html
   <td>false</td>
   <td>
     When initially contacting the driver, use an Ingress when the submitting client passes application dependencies to
-    the driver pod. The Ingress also remains and exposes the Spark UI.me to wait for the driver pod to start running
-    before aborting its execution. This requires an Ingress controller to be installed on the cluster.
+    the driver pod. The Ingress also remains and exposes the Spark UI. This requires an Ingress controller to be
+    installed on the cluster.
   </td>
 </tr>
 <tr>
