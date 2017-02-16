@@ -86,7 +86,6 @@ private[spark] class Client(
         s" ${DRIVER_EXPOSE_INGRESS.key} is true")
     }
 
-    Seq(uploadedFiles, uploadedJars, Some(mainAppResource)).foreach(checkForFilesExistence)
     val submitterLocalFiles = KubernetesFileUtils.getOnlySubmitterLocalFiles(sparkFiles)
     val submitterLocalJars = KubernetesFileUtils.getOnlySubmitterLocalFiles(sparkJars)
     (submitterLocalFiles ++ submitterLocalJars).foreach { file =>
