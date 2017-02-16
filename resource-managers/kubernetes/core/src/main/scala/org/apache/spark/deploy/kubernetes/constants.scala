@@ -74,4 +74,5 @@ package object constants {
   private[spark] val KUBERNETES_SUBMIT_SSL_NAMESPACE = "kubernetes.submit"
   private[spark] val SUBMISSION_CLIENT_RETRIES_NODE_PORT = 3
   private[spark] val SUBMISSION_CLIENT_RETRIES_INGRESS = 20
+  private[spark] val KUBERNETES_MASTER_INTERNAL_URL = "https://kubernetes.default.svc"
 }
