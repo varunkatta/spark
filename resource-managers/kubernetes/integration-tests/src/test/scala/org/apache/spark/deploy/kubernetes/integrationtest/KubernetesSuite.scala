@@ -401,7 +401,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       "--executor-memory", "512m",
       "--executor-cores", "1",
       "--num-executors", "1",
-      "--upload-jars", HELPER_JAR,
+      "--upload-jars", HELPER_JAR_FILE.getAbsolutePath,
       "--class", SPARK_PI_MAIN_CLASS,
       "--conf", "spark.ui.enabled=true",
       "--conf", "spark.testing=false",
@@ -413,7 +413,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       "--conf", "spark.kubernetes.submit.waitAppCompletion=false",
       "--conf", "spark.kubernetes.driver.exposeIngress=true",
       "--conf", s"spark.kubernetes.driver.ingressBasePath=${Minikube.getMinikubeIp}:31000",
-      EXAMPLES_JAR)
+      EXAMPLES_JAR_FILE.getAbsolutePath)
     SparkSubmit.main(args)
     val driverPod = minikubeKubernetesClient
       .pods
