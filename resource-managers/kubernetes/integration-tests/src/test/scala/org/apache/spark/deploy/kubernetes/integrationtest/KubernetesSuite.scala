@@ -401,7 +401,7 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
       "--executor-memory", "512m",
       "--executor-cores", "1",
       "--num-executors", "1",
-      "--upload-jars", HELPER_JAR_FILE.getAbsolutePath,
+      "--jars", HELPER_JAR_FILE.getAbsolutePath,
       "--class", SPARK_PI_MAIN_CLASS,
       "--conf", "spark.ui.enabled=true",
       "--conf", "spark.testing=false",
