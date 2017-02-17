@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.kubernetes
+package org.apache.spark.deploy.kubernetes.tpr
 
 import org.json4s.{CustomSerializer, JString}
 import org.json4s.JsonAST.JNull
 
-import org.apache.spark.deploy.kubernetes.JobState.JobState
+import org.apache.spark.deploy.kubernetes.tpr.JobState.JobState
 
  /**
   * JobState Serializer and Deserializer

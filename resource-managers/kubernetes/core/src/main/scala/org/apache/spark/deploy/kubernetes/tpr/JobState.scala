@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.deploy.kubernetes
+package org.apache.spark.deploy.kubernetes.tpr
 
 private[spark] object JobState extends Enumeration {
   type JobState = Value
