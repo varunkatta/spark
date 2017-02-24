@@ -109,7 +109,7 @@ private[spark] class Client(
     Utils.tryWithResource(new DefaultKubernetesClient(k8ClientConfig)) { kubernetesClient =>
       ShutdownHookManager.addShutdownHook(() =>
         kubernetesResourceCleaner.deleteAllRegisteredResourcesFromKubernetes(kubernetesClient))
-      val kubernetesSslConfigurationProvider = new KubernetesSslConfigurationProvider(
+      val sslConfigurationProvider = new SslConfigurationProvider(
         sparkConf, kubernetesAppId, kubernetesClient, kubernetesResourceCleaner)
       val submitServerSecret = kubernetesClient.secrets().createNew()
         .withNewMetadata()
@@ -120,7 +120,7 @@ private[spark] class Client(
         .done()
       kubernetesResourceCleaner.registerOrUpdateResource(submitServerSecret)
       try {
-        val kubernetesSslConfiguration = kubernetesSslConfigurationProvider.getSslConfiguration()
+        val sslConfiguration = sslConfigurationProvider.getSslConfiguration()
         // start outer watch for status logging of driver pod
         val driverPodCompletedLatch = new CountDownLatch(1)
         // only enable interval logging if in waitForAppCompletion mode
@@ -135,16 +135,16 @@ private[spark] class Client(
             kubernetesClient,
             parsedCustomLabels,
             submitServerSecret,
-            kubernetesSslConfiguration)
+            sslConfiguration)
           configureOwnerReferences(
             kubernetesClient,
             submitServerSecret,
-            kubernetesSslConfiguration.sslSecrets,
+            sslConfiguration.sslSecrets,
             driverPod,
             driverService)
           submitApplicationToDriverServer(
             kubernetesClient,
-            kubernetesSslConfiguration,
+            sslConfiguration,
             driverService,
             submitterLocalFiles,
             submitterLocalJars)
@@ -170,7 +170,7 @@ private[spark] class Client(
 
   private def submitApplicationToDriverServer(
       kubernetesClient: KubernetesClient,
-      kubernetesSslConfiguration: KubernetesSslConfiguration,
+      sslConfiguration: SslConfiguration,
       driverService: Service,
       submitterLocalFiles: Iterable[String],
       submitterLocalJars: Iterable[String]): Unit = {
@@ -186,7 +186,7 @@ private[spark] class Client(
     sparkConf.setIfMissing("spark.blockmanager.port",
       DEFAULT_BLOCKMANAGER_PORT.toString)
     val driverSubmitter = buildDriverSubmissionClient(kubernetesClient, driverService,
-      kubernetesSslConfiguration)
+      sslConfiguration)
     // Sanity check to see if the driver submitter is even reachable.
     driverSubmitter.ping()
     logInfo(s"Submitting local resources to driver pod for application " +
@@ -217,7 +217,7 @@ private[spark] class Client(
       kubernetesClient: KubernetesClient,
       parsedCustomLabels: Map[String, String],
       submitServerSecret: Secret,
-      kubernetesSslConfiguration: KubernetesSslConfiguration): (Pod, Service) = {
+      sslConfiguration: SslConfiguration): (Pod, Service) = {
     val driverKubernetesSelectors = (Map(
       SPARK_DRIVER_LABEL -> kubernetesAppId,
       SPARK_APP_ID_LABEL -> kubernetesAppId,
@@ -250,7 +250,7 @@ private[spark] class Client(
             kubernetesClient,
             driverKubernetesSelectors,
             submitServerSecret,
-            kubernetesSslConfiguration)
+            sslConfiguration)
           kubernetesResourceCleaner.registerOrUpdateResource(driverPod)
           waitForReadyKubernetesComponents(kubernetesClient, endpointsReadyFuture,
             serviceReadyFuture, podReadyFuture)
@@ -366,10 +366,10 @@ private[spark] class Client(
       kubernetesClient: KubernetesClient,
       driverKubernetesSelectors: util.Map[String, String],
       submitServerSecret: Secret,
-      kubernetesSslConfiguration: KubernetesSslConfiguration): Pod = {
+      sslConfiguration: SslConfiguration): Pod = {
     val containerPorts = buildContainerPorts()
     val probePingHttpGet = new HTTPGetActionBuilder()
-      .withScheme(if (kubernetesSslConfiguration.sslOptions.enabled) "HTTPS" else "HTTP")
+      .withScheme(if (sslConfiguration.sslOptions.enabled) "HTTPS" else "HTTP")
       .withPath("/v1/submissions/ping")
       .withNewPort(SUBMISSION_SERVER_PORT_NAME)
       .build()
@@ -386,7 +386,7 @@ private[spark] class Client(
             .withSecretName(submitServerSecret.getMetadata.getName)
             .endSecret()
           .endVolume()
-        .addToVolumes(kubernetesSslConfiguration.sslPodVolumes: _*)
+        .addToVolumes(sslConfiguration.sslPodVolumes: _*)
         .withServiceAccount(serviceAccount)
         .addNewContainer()
           .withName(DRIVER_CONTAINER_NAME)
@@ -397,7 +397,7 @@ private[spark] class Client(
             .withMountPath(secretDirectory)
             .withReadOnly(true)
             .endVolumeMount()
-          .addToVolumeMounts(kubernetesSslConfiguration.sslPodVolumeMounts: _*)
+          .addToVolumeMounts(sslConfiguration.sslPodVolumeMounts: _*)
           .addNewEnv()
             .withName(ENV_SUBMISSION_SECRET_LOCATION)
             .withValue(s"$secretDirectory/$SUBMISSION_APP_SECRET_NAME")
@@ -406,7 +406,7 @@ private[spark] class Client(
             .withName(ENV_SUBMISSION_SERVER_PORT)
             .withValue(SUBMISSION_SERVER_PORT.toString)
             .endEnv()
-          .addToEnv(kubernetesSslConfiguration.sslPodEnvVars: _*)
+          .addToEnv(sslConfiguration.sslPodEnvVars: _*)
           .withPorts(containerPorts.asJava)
           .withNewReadinessProbe().withHttpGet(probePingHttpGet).endReadinessProbe()
           .endContainer()
@@ -563,8 +563,8 @@ private[spark] class Client(
   private def buildDriverSubmissionClient(
       kubernetesClient: KubernetesClient,
       service: Service,
-      kubernetesSslConfiguration: KubernetesSslConfiguration): KubernetesSparkRestApi = {
-    val urlScheme = if (kubernetesSslConfiguration.sslOptions.enabled) {
+      sslConfiguration: SslConfiguration): KubernetesSparkRestApi = {
+    val urlScheme = if (sslConfiguration.sslOptions.enabled) {
       "https"
     } else {
       logWarning("Submitting application details, application secret, and local" +
@@ -592,10 +592,10 @@ private[spark] class Client(
     HttpClientUtil.createClient[KubernetesSparkRestApi](
       uris = nodeUrls,
       maxRetriesPerServer = 3,
-      sslSocketFactory = kubernetesSslConfiguration
+      sslSocketFactory = sslConfiguration
         .driverSubmitClientSslContext
         .getSocketFactory,
-      trustContext = kubernetesSslConfiguration
+      trustContext = sslConfiguration
         .driverSubmitClientTrustManager
         .orNull,
       connectTimeoutMillis = 5000)

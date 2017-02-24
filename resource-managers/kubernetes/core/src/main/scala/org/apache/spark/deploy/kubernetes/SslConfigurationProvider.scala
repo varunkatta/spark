@@ -32,7 +32,7 @@ import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
 import org.apache.spark.util.Utils
 
-private[spark] case class KubernetesSslConfiguration(
+private[spark] case class SslConfiguration(
   sslOptions: SSLOptions,
   isKeyStoreLocalFile: Boolean,
   sslPodEnvVars: Array[EnvVar],
@@ -42,7 +42,7 @@ private[spark] case class KubernetesSslConfiguration(
   driverSubmitClientTrustManager: Option[X509TrustManager],
   driverSubmitClientSslContext: SSLContext)
 
-private[spark] class KubernetesSslConfigurationProvider(
+private[spark] class SslConfigurationProvider(
     sparkConf: SparkConf,
     kubernetesAppId: String,
     kubernetesClient: KubernetesClient,
@@ -51,7 +51,7 @@ private[spark] class KubernetesSslConfigurationProvider(
   private val sslSecretsName = s"$SUBMISSION_SSL_SECRETS_PREFIX-$kubernetesAppId"
   private val sslSecretsDirectory = s"$DRIVER_CONTAINER_SECRETS_BASE_DIR/$kubernetesAppId-ssl"
 
-  def getSslConfiguration(): KubernetesSslConfiguration = {
+  def getSslConfiguration(): SslConfiguration = {
     val (driverSubmitSslOptions, isKeyStoreLocalFile) = parseDriverSubmitSslOptions()
     if (driverSubmitSslOptions.enabled) {
       val sslSecretsMap = mutable.HashMap[String, String]()
@@ -123,7 +123,7 @@ private[spark] class KubernetesSslConfigurationProvider(
       secrets += sslSecrets
       val (driverSubmitClientTrustManager, driverSubmitClientSslContext) =
         buildSslConnectionConfiguration(driverSubmitSslOptions)
-      KubernetesSslConfiguration(
+      SslConfiguration(
         driverSubmitSslOptions,
         isKeyStoreLocalFile,
         sslEnvs.toArray,
@@ -133,7 +133,7 @@ private[spark] class KubernetesSslConfigurationProvider(
         driverSubmitClientTrustManager,
         driverSubmitClientSslContext)
     } else {
-      KubernetesSslConfiguration(
+      SslConfiguration(
         driverSubmitSslOptions,
         isKeyStoreLocalFile,
         Array[EnvVar](),
@@ -152,9 +152,9 @@ private[spark] class KubernetesSslConfigurationProvider(
       val keyStoreURI = Utils.resolveURI(keyStore)
       val isProvidedKeyStoreLocal = keyStoreURI.getScheme match {
         case "file" | null => true
-        case "container" => false
+        case "local" => false
         case _ => throw new SparkException(s"Invalid KeyStore URI $keyStore; keyStore URI" +
-          " for submit server must have scheme file:// or container:// (no scheme defaults" +
+          " for submit server must have scheme file:// or local:// (no scheme defaults" +
           " to file://)")
       }
       (isProvidedKeyStoreLocal, Option.apply(keyStoreURI.getPath))
