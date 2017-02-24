@@ -274,7 +274,9 @@ private[spark] class KubernetesClusterSchedulerBackend(
     override def onDisconnected(rpcAddress: RpcAddress): Unit = {
       addressToExecutorId.get(rpcAddress).foreach { executorId =>
         if (disableExecutor(executorId)) {
-          allocateNewExecutorPod()
+          EXECUTOR_MODIFICATION_LOCK.synchronized {
+            runningExecutorPods += allocateNewExecutorPod()
+          }
         }
       }
     }
