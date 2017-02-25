@@ -260,9 +260,9 @@ private[spark] class KubernetesClusterSchedulerBackend(
   }
 
   /**
-    * Override the DriverEndpoint to add extra logic for the case when
-    * an executor is disconnected.
-    */
+   * Override the DriverEndpoint to add extra logic for the case when
+   * an executor is disconnected.
+   */
   private class KubernetesDriverEndpoint(rpcEnv: RpcEnv, sparkProperties: Seq[(String, String)])
     extends DriverEndpoint(rpcEnv, sparkProperties) {
 
