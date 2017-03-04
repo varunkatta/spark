@@ -78,9 +78,9 @@ private[spark] class NodePortUrisDriverServiceManager extends DriverServiceManag
       case json =>
         try {
           val mapper = new ObjectMapper()
-          val taints = mapper.readValue(schedulerTaints, classOf[Array[SchedulerAnnotation]])
-          return taints.exists(taint => taint.key == SCHEDULER_MASTER_TAINT_KEY
-            && taint.effect == SCHEDULER_MASTER_TAINT_EFFECT)
+          val taints = mapper.readValue(json, classOf[Array[SchedulerAnnotation]])
+          return taints.exists(t => t.key == SCHEDULER_MASTER_TAINT_KEY
+            && t.effect == SCHEDULER_MASTER_TAINT_EFFECT)
         } catch {
           case e: Throwable =>
             logWarning(s"Failed to parse taints on node ${node.getMetadata.getName}", e)
