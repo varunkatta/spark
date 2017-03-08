@@ -137,7 +137,7 @@ or `local:`. A scheme of `file:` corresponds to the keyStore being located on th
 the driver container as a [secret volume](https://kubernetes.io/docs/user-guide/secrets/). When the URI has the scheme
 `local:`, the file is assumed to already be on the container's disk at the appropriate path.
 
-### Determining the Driver Base URI
+### Submission of local files through Ingress/External controller
 
 Kubernetes pods run with their own IP address space. If Spark is run in cluster mode, the driver pod may not be
 accessible to the submitter. However, the submitter needs to send local dependencies from its local disk to the driver
