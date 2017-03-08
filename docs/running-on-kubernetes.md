@@ -12,15 +12,28 @@ currently limited and not well-tested. This should not be used in production env
 * You must have appropriate permissions to create and list [pods](https://kubernetes.io/docs/user-guide/pods/), [nodes](https://kubernetes.io/docs/admin/node/) and [services](https://kubernetes.io/docs/user-guide/services/) in your cluster. You can verify that you can list these resources by running `kubectl get nodes`, `kubectl get pods` and `kubectl get svc` which should give you a list of nodes, pods and services (if any) respectively.
 * You must have an extracted spark distribution with Kubernetes support, or build one from [source](https://github.com/apache-spark-on-k8s/spark).
 
-## Setting Up Docker Images
+## Driver & Executor Images
 
 Kubernetes requires users to supply images that can be deployed into containers within pods. The images are built to
 be run in a container runtime environment that Kubernetes supports. Docker is a container runtime environment that is
 frequently used with Kubernetes, so Spark provides some support for working with Docker to get started quickly.
 
-To use Spark on Kubernetes with Docker, images for the driver and the executors need to built and published to an
-accessible Docker registry. Spark distributions include the Docker files for the driver and the executor at
-`dockerfiles/driver/Dockerfile` and `docker/executor/Dockerfile`, respectively. Use these Docker files to build the
+If you wish to use pre-built docker images, you may use the images published in [kubespark](https://hub.docker.com/u/kubespark/). The images are as follows:
+
+<table class="table">
+<tr><th>Component</th><th>Image</th></tr>
+<tr>
+  <td>Spark Driver Image</td>
+  <td><code>kubespark/spark-driver:0.1.0-alpha.1</code></td>
+</tr>
+<tr>
+  <td>Spark Executor Image</td>
+  <td><code>kubespark/spark-executor:0.1.0-alpha.1</code></td>
+</tr>
+</table>
+
+You may also build these docker images from sources, or customize them as required. Spark distributions include the Docker files for the driver and the executor at
+`dockerfiles/driver/Dockerfile` and `dockerfiles/executor/Dockerfile`, respectively. Use these Docker files to build the
 Docker images, and then tag them with the registry that the images should be sent to. Finally, push the images to the
 registry.
 
@@ -44,8 +57,8 @@ are set up as described above:
       --kubernetes-namespace default \
       --conf spark.executor.instances=5 \
       --conf spark.app.name=spark-pi \
-      --conf spark.kubernetes.driver.docker.image=registry-host:5000/spark-driver:latest \
-      --conf spark.kubernetes.executor.docker.image=registry-host:5000/spark-executor:latest \
+      --conf spark.kubernetes.driver.docker.image=kubespark/spark-driver:0.1.0-alpha.1 \
+      --conf spark.kubernetes.executor.docker.image=kubespark/spark-executor:0.1.0-alpha.1 \
       examples/jars/spark_examples_2.11-2.2.0.jar
 
 The Spark master, specified either via passing the `--master` command line argument to `spark-submit` or by setting
@@ -112,8 +125,8 @@ If our local proxy were listening on port 8001, we would have our submission loo
       --kubernetes-namespace default \
       --conf spark.executor.instances=5 \
       --conf spark.app.name=spark-pi \
-      --conf spark.kubernetes.driver.docker.image=registry-host:5000/spark-driver:latest \
-      --conf spark.kubernetes.executor.docker.image=registry-host:5000/spark-executor:latest \
+      --conf spark.kubernetes.driver.docker.image=kubespark/spark-driver:0.1.0-alpha.1 \
+      --conf spark.kubernetes.executor.docker.image=kubespark/spark-executor:0.1.0-alpha.1 \
       examples/jars/spark_examples_2.11-2.2.0.jar
 
 Communication between Spark and Kubernetes clusters is performed using the fabric8 kubernetes-client library.
