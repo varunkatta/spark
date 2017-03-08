@@ -1,9 +1,9 @@
 ---
 layout: global
-title: Running Spark on the cloud with Kubernetes
+title: Running Spark in the cloud with Kubernetes
 ---
 
-For general information about running Spark on Kubernetes, refer to [this section](running-on-kubernetes.md).
+For general information about running Spark on Kubernetes, refer to [running Spark on Kubernetes](running-on-kubernetes.md).
 
 A Kubernetes cluster may be brought up on different cloud providers or on premise. It is commonly provisioned through [Google Container Engine](https://cloud.google.com/container-engine/), or using [kops](https://github.com/kubernetes/kops) on AWS, or on premise using [kubeadm](https://kubernetes.io/docs/getting-started-guides/kubeadm/).
 
