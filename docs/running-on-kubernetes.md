@@ -68,7 +68,6 @@ being contacted at `api_server_url`. If no HTTP protocol is specified in the URL
 setting the master to `k8s://example.com:443` is equivalent to setting it to `k8s://https://example.com:443`, but to
 connect without SSL on a different port, the master would be set to `k8s://http://example.com:8443`.
 
-
 If you have a Kubernetes cluster setup, one way to discover the apiserver URL is by executing `kubectl cluster-info`.
 
     > kubectl cluster-info
@@ -80,33 +79,15 @@ In the above example, the specific Kubernetes cluster can be used with spark sub
 Note that applications can currently only be executed in cluster mode, where the driver and its executors are running on
 the cluster.
  
-### Dependency Management and Docker Containers
+### Specifying input files
 
 Spark supports specifying JAR paths that are either on the submitting host's disk, or are located on the disk of the
 driver and executors. Refer to the [application submission](submitting-applications.html#advanced-dependency-management)
 section for details. Note that files specified with the `local://` scheme should be added to the container image of both
 the driver and the executors. Files without a scheme or with the scheme `file://` are treated as being on the disk of
 the submitting machine, and are uploaded to the driver running in Kubernetes before launching the application.
- 
-### Setting Up SSL For Submitting the Driver
 
-When submitting to Kubernetes, a pod is started for the driver, and the pod starts an HTTP server. This HTTP server
-receives the driver's configuration, including uploaded driver jars, from the client before starting the application.
-Spark supports using SSL to encrypt the traffic in this bootstrapping process. It is recommended to configure this
-whenever possible. 
-
-See the [security page](security.html) and [configuration](configuration.html) sections for more information on
-configuring SSL; use the prefix `spark.ssl.kubernetes.submit` in configuring the SSL-related fields in the context
-of submitting to Kubernetes. For example, to set the trustStore used when the local machine communicates with the driver
-pod in starting the application, set `spark.ssl.kubernetes.submit.trustStore`.
-
-One note about the keyStore is that it can be specified as either a file on the client machine or a file in the
-container image's disk. Thus `spark.ssl.kubernetes.submit.keyStore` can be a URI with a scheme of either `file:`
-or `local:`. A scheme of `file:` corresponds to the keyStore being located on the client machine; it is mounted onto
-the driver container as a [secret volume](https://kubernetes.io/docs/user-guide/secrets/). When the URI has the scheme
-`local:`, the file is assumed to already be on the container's disk at the appropriate path.
-
-### Kubernetes Clusters and the authenticated proxy endpoint
+### Accessing Kubernetes Clusters
 
 Spark-submit also supports submission through the
 [local kubectl proxy](https://kubernetes.io/docs/user-guide/accessing-the-cluster/#using-kubectl-proxy). One can use the
@@ -131,8 +112,28 @@ If our local proxy were listening on port 8001, we would have our submission loo
 
 Communication between Spark and Kubernetes clusters is performed using the fabric8 kubernetes-client library.
 The above mechanism using `kubectl proxy` can be used when we have authentication providers that the fabric8
-kubernetes-client library does not support. Authentication using X509 Client Certs and oauth tokens
+kubernetes-client library does not support. Authentication using X509 Client Certs and OAuth tokens
 is currently supported.
+
+## Advanced
+ 
+### Setting Up SSL For Submitting the Driver
+
+When submitting to Kubernetes, a pod is started for the driver, and the pod starts an HTTP server. This HTTP server
+receives the driver's configuration, including uploaded driver jars, from the client before starting the application.
+Spark supports using SSL to encrypt the traffic in this bootstrapping process. It is recommended to configure this
+whenever possible. 
+
+See the [security page](security.html) and [configuration](configuration.html) sections for more information on
+configuring SSL; use the prefix `spark.ssl.kubernetes.submit` in configuring the SSL-related fields in the context
+of submitting to Kubernetes. For example, to set the trustStore used when the local machine communicates with the driver
+pod in starting the application, set `spark.ssl.kubernetes.submit.trustStore`.
+
+One note about the keyStore is that it can be specified as either a file on the client machine or a file in the
+container image's disk. Thus `spark.ssl.kubernetes.submit.keyStore` can be a URI with a scheme of either `file:`
+or `local:`. A scheme of `file:` corresponds to the keyStore being located on the client machine; it is mounted onto
+the driver container as a [secret volume](https://kubernetes.io/docs/user-guide/secrets/). When the URI has the scheme
+`local:`, the file is assumed to already be on the container's disk at the appropriate path.
 
 ### Determining the Driver Base URI
 
