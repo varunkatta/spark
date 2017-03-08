@@ -22,6 +22,3 @@ A Kubernetes cluster may be brought up on different cloud providers or on premis
 
 Known issues:
 * If you face OAuth token expiry errors when you run spark-submit, it is likely because the token needs to be refreshed. The easiest way to fix this is to run any `kubectl` command, say, `kubectl version` and then retry your submission.
-
-
-
