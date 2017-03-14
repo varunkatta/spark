@@ -53,7 +53,7 @@ private[spark] class Client(
     .getOrElse("spark")
   private val kubernetesAppId = s"$appName-$launchTime".toLowerCase.replaceAll("\\.", "-")
   private val secretName = s"$SUBMISSION_APP_SECRET_PREFIX-$kubernetesAppId"
-  private val secretDirectory = s"$DRIVER_CONTAINER_SECRETS_BASE_DIR/$kubernetesAppId"
+  private val secretDirectory = s"$DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR/$kubernetesAppId"
   private val driverDockerImage = sparkConf.get(DRIVER_DOCKER_IMAGE)
   private val uiPort = sparkConf.getInt("spark.ui.port", DEFAULT_UI_PORT)
   private val driverSubmitTimeoutSecs = sparkConf.get(KUBERNETES_DRIVER_SUBMIT_TIMEOUT)
@@ -123,19 +123,19 @@ private[spark] class Client(
       .withApiVersion("v1")
       .withMasterUrl(master)
       .withNamespace(namespace)
-    sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach {
+    sparkConf.get(KUBERNETES_SUBMIT_CA_CERT_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
     }
-    sparkConf.get(KUBERNETES_CLIENT_KEY_FILE).foreach {
+    sparkConf.get(KUBERNETES_SUBMIT_CLIENT_KEY_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withClientKeyFile(f)
     }
-    sparkConf.get(KUBERNETES_CLIENT_CERT_FILE).foreach {
+    sparkConf.get(KUBERNETES_SUBMIT_CLIENT_CERT_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withClientCertFile(f)
     }
-    sparkConf.get(KUBERNETES_OAUTH_TOKEN).foreach { token =>
+    sparkConf.get(KUBERNETES_SUBMIT_OAUTH_TOKEN).foreach { token =>
       k8ConfBuilder = k8ConfBuilder.withOauthToken(token)
       // Remove the oauth token from Spark conf so that its doesn't appear in the Spark UI.
-      sparkConf.set(KUBERNETES_OAUTH_TOKEN, "<present_but_redacted>")
+      sparkConf.set(KUBERNETES_SUBMIT_OAUTH_TOKEN, "<present_but_redacted>")
     }
 
     val k8ClientConfig = k8ConfBuilder.build
@@ -165,6 +165,8 @@ private[spark] class Client(
         try {
           val sslConfigurationProvider = new SslConfigurationProvider(
             sparkConf, kubernetesAppId, kubernetesClient, kubernetesResourceCleaner)
+          val kubernetesClientCredentialsProvider = new DriverPodKubernetesCredentialsProvider(
+            sparkConf, kubernetesAppId)
           val submitServerSecret = kubernetesClient.secrets().createNew()
             .withNewMetadata()
             .withName(secretName)
@@ -172,26 +174,28 @@ private[spark] class Client(
             .withData(Map((SUBMISSION_APP_SECRET_NAME, secretBase64String)).asJava)
             .withType("Opaque")
             .done()
+          val driverPodCredentials = kubernetesClientCredentialsProvider.getDriverPodKubernetesCredentials()
+          val resolvedCredentials = kubernetesClient
+            .secrets()
+            .create(driverPodCredentials.credentialsSecret)
+          kubernetesResourceCleaner.registerOrUpdateResource(resolvedCredentials)
           kubernetesResourceCleaner.registerOrUpdateResource(submitServerSecret)
           val sslConfiguration = sslConfigurationProvider.getSslConfiguration()
-          val driverKubernetesSelectors = (Map(
-            SPARK_DRIVER_LABEL -> kubernetesAppId,
-            SPARK_APP_ID_LABEL -> kubernetesAppId,
-            SPARK_APP_NAME_LABEL -> appName)
-            ++ parsedCustomLabels)
           val (driverPod, driverService) = launchDriverKubernetesComponents(
             kubernetesClient,
             driverServiceManager,
             parsedCustomLabels,
             parsedCustomAnnotations,
             submitServerSecret,
-            sslConfiguration)
+            sslConfiguration,
+            driverPodCredentials)
           configureOwnerReferences(
             kubernetesClient,
             submitServerSecret,
             sslConfiguration.sslSecrets,
             driverPod,
-            driverService)
+            driverService,
+            driverPodCredentials.credentialsSecret)
           submitApplicationToDriverServer(
             kubernetesClient,
             driverServiceManager,
@@ -294,7 +298,8 @@ private[spark] class Client(
       customLabels: Map[String, String],
       customAnnotations: Map[String, String],
       submitServerSecret: Secret,
-      sslConfiguration: SslConfiguration): (Pod, Service) = {
+      sslConfiguration: SslConfiguration,
+      driverPodKubernetesCredentials: DriverPodKubernetesCredentials): (Pod, Service) = {
     val driverKubernetesSelectors = (Map(
       SPARK_DRIVER_LABEL -> kubernetesAppId,
       SPARK_APP_ID_LABEL -> kubernetesAppId,
@@ -327,7 +332,8 @@ private[spark] class Client(
             driverKubernetesSelectors,
             customAnnotations,
             submitServerSecret,
-            sslConfiguration)
+            sslConfiguration,
+            driverPodKubernetesCredentials)
           waitForReadyKubernetesComponents(kubernetesClient, endpointsReadyFuture,
             serviceReadyFuture, podReadyFuture)
           (driverPod, driverService)
@@ -347,7 +353,8 @@ private[spark] class Client(
       submitServerSecret: Secret,
       sslSecrets: Array[Secret],
       driverPod: Pod,
-      driverService: Service): Service = {
+      driverService: Service,
+      credentialsSecret: Secret): Service = {
     val driverPodOwnerRef = new OwnerReferenceBuilder()
       .withName(driverPod.getMetadata.getName)
       .withUid(driverPod.getMetadata.getUid)
@@ -381,6 +388,15 @@ private[spark] class Client(
           .endMetadata()
         .done()
     kubernetesResourceCleaner.registerOrUpdateResource(updatedService)
+    val updatedCredentialsSecret = kubernetesClient
+      .secrets()
+      .withName(credentialsSecret.getMetadata.getName)
+      .edit()
+        .editMetadata()
+          .addToOwnerReferences(driverPodOwnerRef)
+          .endMetadata()
+        .done()
+    kubernetesResourceCleaner.registerOrUpdateResource(updatedCredentialsSecret)
     updatedService
   }
 
@@ -421,7 +437,8 @@ private[spark] class Client(
       driverKubernetesSelectors: Map[String, String],
       customAnnotations: Map[String, String],
       submitServerSecret: Secret,
-      sslConfiguration: SslConfiguration): Pod = {
+      sslConfiguration: SslConfiguration,
+      driverPodKubernetesCredentials: DriverPodKubernetesCredentials): Pod = {
     val containerPorts = buildContainerPorts()
     val probePingHttpGet = new HTTPGetActionBuilder()
       .withScheme(if (sslConfiguration.sslOptions.enabled) "HTTPS" else "HTTP")
@@ -448,8 +465,9 @@ private[spark] class Client(
             .withSecretName(submitServerSecret.getMetadata.getName)
             .endSecret()
           .endVolume()
+        .addToVolumes(driverPodKubernetesCredentials.credentialsSecretVolume)
         .addToVolumes(sslConfiguration.sslPodVolumes: _*)
-        .withServiceAccount(serviceAccount)
+        .withServiceAccount(serviceAccount.getOrElse("default"))
         .addNewContainer()
           .withName(DRIVER_CONTAINER_NAME)
           .withImage(driverDockerImage)
@@ -459,6 +477,7 @@ private[spark] class Client(
             .withMountPath(secretDirectory)
             .withReadOnly(true)
             .endVolumeMount()
+          .addToVolumeMounts(driverPodKubernetesCredentials.credentialsSecretVolumeMount)
           .addToVolumeMounts(sslConfiguration.sslPodVolumeMounts: _*)
           .addNewEnv()
             .withName(ENV_SUBMISSION_SECRET_LOCATION)

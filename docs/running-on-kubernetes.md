@@ -200,14 +200,14 @@ from the other deployment modes. See the [configuration page](configuration.html
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.submit.caCertFile</code></td>
+  <td><code>spark.kubernetes.apiserver.submit.caCertFile</code></td>
   <td>(none)</td>
   <td>
     CA cert file for connecting to Kubernetes over SSL. This file should be located on the submitting machine's disk.
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.submit.clientKeyFile</code></td>
+  <td><code>spark.kubernetes.apiserver.submit.clientKeyFile</code></td>
   <td>(none)</td>
   <td>
     Client key file for authenticating against the Kubernetes API server. This file should be located on the submitting
@@ -215,7 +215,7 @@ from the other deployment modes. See the [configuration page](configuration.html
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.submit.clientCertFile</code></td>
+  <td><code>spark.kubernetes.apiserver.submit.clientCertFile</code></td>
   <td>(none)</td>
   <td>
     Client cert file for authenticating against the Kubernetes API server. This file should be located on the submitting
@@ -223,7 +223,7 @@ from the other deployment modes. See the [configuration page](configuration.html
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.submit.oauthToken</code></td>
+  <td><code>spark.kubernetes.apiserver.submit.oauthToken</code></td>
   <td>(none)</td>
   <td>
     OAuth token to use when authenticating against the against the Kubernetes API server. Note that unlike the other
@@ -231,11 +231,45 @@ from the other deployment modes. See the [configuration page](configuration.html
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.submit.serviceAccountName</code></td>
+  <td><code>spark.kubernetes.apiserver.driver.caCertFile</code></td>
+  <td>(none)</td>
+  <td>
+    CA cert file for connecting to Kubernetes over SSL from the driver pod when requesting executors. This file should
+    be located on the submitting machine's disk, and will be uploaded as a secret to the driver pod.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.apiserver.driver.clientKeyFile</code></td>
+  <td>(none)</td>
+  <td>
+    Client key file for authenticating against the Kubernetes API server from the driver pod when requesting executors.
+    This file should be located on the submitting machine's disk, and will be uploaded as a secret to the driver pod.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.apiserver.driver.clientCertFile</code></td>
+  <td>(none)</td>
+  <td>
+    Client cert file for authenticating against the Kubernetes API server from the driver pod when requesting executors.
+    This file should be located on the submitting machine's disk, and will be uploaded as a secret to the driver pod.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.apiserver.driver.oauthToken</code></td>
+  <td>(none)</td>
+  <td>
+    OAuth token to use when authenticating against the against the Kubernetes API server from the driver pod when
+    requesting executors. Note that unlike the other authentication options, this should be the exact string value of
+    the token to use for the authentication. This token value is mounted as a secret on the driver pod.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.apiserver.driver.serviceAccountName</code></td>
   <td><code>default</code></td>
   <td>
     Service account that is used when running the driver pod. The driver pod uses this service account when requesting
-    executor pods from the API server.
+    executor pods from the API server. Note that this cannot be specified alongside a CA cert file, client key file,
+    client cert file, and/or OAuth token.
   </td>
 </tr>
 <tr>

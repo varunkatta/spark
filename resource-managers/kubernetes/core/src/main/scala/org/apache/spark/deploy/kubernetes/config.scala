@@ -54,40 +54,47 @@ package object config {
       .stringConf
       .createWithDefault(s"spark-executor:$sparkVersion")
 
-  private[spark] val KUBERNETES_CA_CERT_FILE =
-    ConfigBuilder("spark.kubernetes.submit.caCertFile")
+  private val APISERVER_SUBMIT_CONF_PREFIX = "spark.kubernetes.apiserver.submit"
+  private val APISERVER_DRIVER_CONF_PREFIX = "spark.kubernetes.apiserver.driver"
+
+  private[spark] val KUBERNETES_SUBMIT_CA_CERT_FILE =
+    ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.caCertFile")
       .doc("""
-          | CA cert file for connecting to Kubernetes over SSL. This
+          | CA cert file for connecting to Kubernetes over SSL when
+          | creating Kubernetes resources for the driver. This
           | file should be located on the submitting machine's disk.
         """.stripMargin)
       .stringConf
       .createOptional
 
-  private[spark] val KUBERNETES_CLIENT_KEY_FILE =
-    ConfigBuilder("spark.kubernetes.submit.clientKeyFile")
+  private[spark] val KUBERNETES_SUBMIT_CLIENT_KEY_FILE =
+    ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.clientKeyFile")
       .doc("""
           | Client key file for authenticating against the Kubernetes
-          | API server. This file should be located on the submitting
+          | API server when initially creating Kubernetes resources for
+          | the driver. This file should be located on the submitting
           | machine's disk.
         """.stripMargin)
       .stringConf
       .createOptional
 
-  private[spark] val KUBERNETES_CLIENT_CERT_FILE =
-    ConfigBuilder("spark.kubernetes.submit.clientCertFile")
+  private[spark] val KUBERNETES_SUBMIT_CLIENT_CERT_FILE =
+    ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.clientCertFile")
       .doc("""
           | Client cert file for authenticating against the
-          | Kubernetes API server. This file should be located on
+          | Kubernetes API server when initially creating Kubernetes
+          | resources for the driver. This file should be located on
           | the submitting machine's disk.
         """.stripMargin)
       .stringConf
       .createOptional
 
-  private[spark] val KUBERNETES_OAUTH_TOKEN =
-    ConfigBuilder("spark.kubernetes.submit.oauthToken")
+  private[spark] val KUBERNETES_SUBMIT_OAUTH_TOKEN =
+    ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.oauthToken")
       .doc("""
           | OAuth token to use when authenticating against the
-          | against the Kubernetes API server. Note that unlike
+          | against the Kubernetes API server when initially creating
+          | Kubernetes resources for the driver. Note that unlike
           | the other authentication options, this should be the
           | exact string value of the token to use for the
           | authentication.
@@ -95,15 +102,64 @@ package object config {
       .stringConf
       .createOptional
 
+  private[spark] val KUBERNETES_DRIVER_CA_CERT_FILE =
+    ConfigBuilder(s"$APISERVER_DRIVER_CONF_PREFIX.caCertFile")
+      .doc("""
+             | CA cert file for connecting to Kubernetes over SSL from
+             | the driver pod when requesting executors. This file should
+             | be located on the submitting machine's disk, and will be
+             | uploaded as a secret to the driver pod.
+           """.stripMargin)
+      .stringConf
+      .createOptional
+
+  private[spark] val KUBERNETES_DRIVER_CLIENT_KEY_FILE =
+    ConfigBuilder(s"$APISERVER_DRIVER_CONF_PREFIX.clientKeyFile")
+      .doc("""
+             | Client key file for authenticating against the Kubernetes
+             | API server from the driver pod when requesting executors.
+             | This file should be located on the submitting machine's disk,
+             | and will be uploaded as a secret to the driver pod.
+           """.stripMargin)
+      .stringConf
+      .createOptional
+
+  private[spark] val KUBERNETES_DRIVER_CLIENT_CERT_FILE =
+    ConfigBuilder(s"$APISERVER_DRIVER_CONF_PREFIX.clientCertFile")
+      .doc("""
+             | Client cert file for authenticating against the
+             | Kubernetes API server from the driver pod when requesting
+             | executors. This file should be located on the submitting
+             | machine's disk, and will be uploaded as a secret to the
+             | driver pod.
+           """.stripMargin)
+      .stringConf
+      .createOptional
+
+  private[spark] val KUBERNETES_DRIVER_OAUTH_TOKEN =
+    ConfigBuilder(s"$APISERVER_DRIVER_CONF_PREFIX.oauthToken")
+      .doc("""
+             | OAuth token to use when authenticating against the
+             | against the Kubernetes API server from the driver pod
+             | when requesting executors. Note that unlike the other
+             | authentication options, this should be the exact string
+             | value of the token to use for the authentication. This
+             | token value is mounted as a secret on the driver pod.
+           """.stripMargin)
+      .stringConf
+      .createOptional
+
   private[spark] val KUBERNETES_SERVICE_ACCOUNT_NAME =
-    ConfigBuilder("spark.kubernetes.submit.serviceAccountName")
+    ConfigBuilder(s"$APISERVER_DRIVER_CONF_PREFIX.serviceAccountName")
       .doc("""
           | Service account that is used when running the driver pod.
           | The driver pod uses this service account when requesting
-          | executor pods from the API server.
+          | executor pods from the API server. If specific credentials
+          | are given for the driver pod to use, the driver will favor
+          | using those credentials instead.
         """.stripMargin)
       .stringConf
-      .createWithDefault("default")
+      .createOptional
 
   // Note that while we set a default for this when we start up the
   // scheduler, the specific default value is dynamically determined

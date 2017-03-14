@@ -25,8 +25,18 @@ import io.fabric8.kubernetes.client.{Config, ConfigBuilder, DefaultKubernetesCli
 import org.apache.spark.deploy.kubernetes.constants._
 
 private[spark] object KubernetesClientBuilder {
-  private val API_SERVER_TOKEN = new File(Config.KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
-  private val CA_CERT_FILE = new File(Config.KUBERNETES_SERVICE_ACCOUNT_CA_CRT_PATH)
+  private val SERVICE_ACCOUNT_TOKEN = new File(Config.KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH)
+  private val SERVICE_ACCOUNT_CA_CERT = new File(Config.KUBERNETES_SERVICE_ACCOUNT_CA_CRT_PATH)
+  private val MOUNTED_CREDENTIALS_BASE_DIR = new File(
+    DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRETS_BASE_DIR)
+  private val MOUNTED_TOKEN = new File(MOUNTED_CREDENTIALS_BASE_DIR,
+    DRIVER_CONTAINER_OAUTH_TOKEN_SECRET_NAME)
+  private val MOUNTED_CA_CERT = new File(MOUNTED_CREDENTIALS_BASE_DIR,
+    DRIVER_CONTAINER_CA_CERT_FILE_SECRET_NAME)
+  private val MOUNTED_CLIENT_KEY = new File(MOUNTED_CREDENTIALS_BASE_DIR,
+    DRIVER_CONTAINER_CLIENT_KEY_FILE_SECRET_NAME)
+  private val MOUNTED_CLIENT_CERT = new File(MOUNTED_CREDENTIALS_BASE_DIR,
+    DRIVER_CONTAINER_CLIENT_CERT_FILE_SECRET_NAME)
 
   /**
    * Creates a {@link KubernetesClient}, expecting to be from
@@ -34,20 +44,41 @@ private[spark] object KubernetesClientBuilder {
    * are picked up from canonical locations, as they are injected
    * into the pod's disk space.
    */
-  def buildFromWithinPod(
-      kubernetesNamespace: String): DefaultKubernetesClient = {
+  def buildFromWithinPod(kubernetesNamespace: String): DefaultKubernetesClient = {
     var clientConfigBuilder = new ConfigBuilder()
       .withApiVersion("v1")
       .withMasterUrl(KUBERNETES_MASTER_INTERNAL_URL)
       .withNamespace(kubernetesNamespace)
 
-    if (CA_CERT_FILE.isFile) {
-      clientConfigBuilder = clientConfigBuilder.withCaCertFile(CA_CERT_FILE.getAbsolutePath)
-    }
+    if (MOUNTED_TOKEN.isFile ||
+        MOUNTED_CA_CERT.isFile ||
+        MOUNTED_CLIENT_KEY.isFile ||
+        MOUNTED_CLIENT_CERT.isFile) {
+      if (MOUNTED_TOKEN.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withOauthToken(
+          Files.toString(MOUNTED_TOKEN, Charsets.UTF_8))
+      }
+      if (MOUNTED_CA_CERT.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withCaCertFile(MOUNTED_CA_CERT.getAbsolutePath)
+      }
+      if (MOUNTED_CLIENT_KEY.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withClientKeyFile(
+          MOUNTED_CLIENT_KEY.getAbsolutePath)
+      }
+      if (MOUNTED_CLIENT_CERT.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withClientCertFile(
+          MOUNTED_CLIENT_CERT.getAbsolutePath)
+      }
+    } else {
+      if (SERVICE_ACCOUNT_CA_CERT.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withCaCertFile(
+          SERVICE_ACCOUNT_CA_CERT.getAbsolutePath)
+      }
 
-    if (API_SERVER_TOKEN.isFile) {
-      clientConfigBuilder = clientConfigBuilder.withOauthToken(
-        Files.toString(API_SERVER_TOKEN, Charsets.UTF_8))
+      if (SERVICE_ACCOUNT_TOKEN.isFile) {
+        clientConfigBuilder = clientConfigBuilder.withOauthToken(
+          Files.toString(SERVICE_ACCOUNT_TOKEN, Charsets.UTF_8))
+      }
     }
     new DefaultKubernetesClient(clientConfigBuilder.build)
   }
