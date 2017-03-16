@@ -174,7 +174,8 @@ private[spark] class Client(
             .withData(Map((SUBMISSION_APP_SECRET_NAME, secretBase64String)).asJava)
             .withType("Opaque")
             .done()
-          val driverPodCredentials = kubernetesClientCredentialsProvider.getDriverPodKubernetesCredentials()
+          val driverPodCredentials = kubernetesClientCredentialsProvider
+            .getDriverPodKubernetesCredentials()
           val resolvedCredentials = kubernetesClient
             .secrets()
             .create(driverPodCredentials.credentialsSecret)

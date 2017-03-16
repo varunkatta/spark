@@ -24,7 +24,8 @@ package object constants {
   private[spark] val SPARK_EXECUTOR_ID_LABEL = "spark-exec-id"
 
   // Secrets
-  private[spark] val DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR = "/var/run/secrets/spark-submission"
+  private[spark] val DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR =
+    "/var/run/secrets/spark-submission"
   private[spark] val DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRETS_BASE_DIR =
     "/var/run/secrets/kubernetes-credentials"
   private[spark] val DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRET_NAME =
