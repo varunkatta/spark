@@ -54,8 +54,8 @@ package object config {
       .stringConf
       .createWithDefault(s"spark-executor:$sparkVersion")
 
-  private val APISERVER_SUBMIT_CONF_PREFIX = "spark.kubernetes.apiserver.submit"
-  private val APISERVER_DRIVER_CONF_PREFIX = "spark.kubernetes.apiserver.driver"
+  private val APISERVER_SUBMIT_CONF_PREFIX = "spark.kubernetes.authentication.submit"
+  private val APISERVER_DRIVER_CONF_PREFIX = "spark.kubernetes.authentication.driver"
 
   private[spark] val KUBERNETES_SUBMIT_CA_CERT_FILE =
     ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.caCertFile")
