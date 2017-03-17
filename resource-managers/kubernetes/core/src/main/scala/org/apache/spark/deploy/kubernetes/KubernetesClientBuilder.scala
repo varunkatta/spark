@@ -35,10 +35,8 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
   private val clientCertFile = sparkConf.get(KUBERNETES_DRIVER_MOUNTED_CLIENT_CERT_FILE)
 
   /**
-   * Creates a {@link KubernetesClient}, expecting to be from
-   * within the context of a pod. When doing so, credentials files
-   * are picked up from canonical locations, as they are injected
-   * into the pod's disk space.
+   * Creates a {@link KubernetesClient}, expecting to be from within the context of a pod. When
+   * doing so, service account token files can be picked up from canonical locations.
    */
   def buildFromWithinPod(): DefaultKubernetesClient = {
     val baseClientConfigBuilder = new ConfigBuilder()
