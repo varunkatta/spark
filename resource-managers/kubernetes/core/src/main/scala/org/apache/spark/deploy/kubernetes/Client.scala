@@ -21,6 +21,7 @@ import java.security.SecureRandom
 import java.util.ServiceLoader
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
+import com.google.common.base.Charsets
 import com.google.common.io.Files
 import com.google.common.util.concurrent.SettableFuture
 import io.fabric8.kubernetes.api.model._
@@ -32,7 +33,7 @@ import scala.collection.JavaConverters._
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
-import org.apache.spark.deploy.rest.{AppResource, ContainerAppResource, KubernetesCreateSubmissionRequest, KubernetesCredentials, RemoteAppResource, UploadedAppResource}
+import org.apache.spark.deploy.rest.{AppResource, ContainerAppResource, KubernetesCreateSubmissionRequest, RemoteAppResource, UploadedAppResource}
 import org.apache.spark.deploy.rest.kubernetes._
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.{ShutdownHookManager, Utils}
@@ -52,7 +53,7 @@ private[spark] class Client(
     .getOrElse("spark")
   private val kubernetesAppId = s"$appName-$launchTime".toLowerCase.replaceAll("\\.", "-")
   private val secretName = s"$SUBMISSION_APP_SECRET_PREFIX-$kubernetesAppId"
-  private val secretDirectory = s"$DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR/$kubernetesAppId"
+  private val secretDirectory = s"$DRIVER_CONTAINER_SECRETS_BASE_DIR/$kubernetesAppId"
   private val driverDockerImage = sparkConf.get(DRIVER_DOCKER_IMAGE)
   private val uiPort = sparkConf.getInt("spark.ui.port", DEFAULT_UI_PORT)
   private val driverSubmitTimeoutSecs = sparkConf.get(KUBERNETES_DRIVER_SUBMIT_TIMEOUT)
@@ -118,22 +119,23 @@ private[spark] class Client(
       customAnnotations,
       KUBERNETES_DRIVER_ANNOTATIONS.key,
       "annotations")
-    val driverPodKubernetesCredentials = new DriverPodKubernetesCredentialsProvider(sparkConf).get()
     var k8ConfBuilder = new K8SConfigBuilder()
       .withApiVersion("v1")
       .withMasterUrl(master)
       .withNamespace(namespace)
-    sparkConf.get(KUBERNETES_SUBMIT_CA_CERT_FILE).foreach {
+    sparkConf.get(KUBERNETES_CA_CERT_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withCaCertFile(f)
     }
-    sparkConf.get(KUBERNETES_SUBMIT_CLIENT_KEY_FILE).foreach {
+    sparkConf.get(KUBERNETES_CLIENT_KEY_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withClientKeyFile(f)
     }
-    sparkConf.get(KUBERNETES_SUBMIT_CLIENT_CERT_FILE).foreach {
+    sparkConf.get(KUBERNETES_CLIENT_CERT_FILE).foreach {
       f => k8ConfBuilder = k8ConfBuilder.withClientCertFile(f)
     }
-    sparkConf.get(KUBERNETES_SUBMIT_OAUTH_TOKEN).foreach { token =>
+    sparkConf.get(KUBERNETES_OAUTH_TOKEN).foreach { token =>
       k8ConfBuilder = k8ConfBuilder.withOauthToken(token)
+      // Remove the oauth token from Spark conf so that its doesn't appear in the Spark UI.
+      sparkConf.set(KUBERNETES_OAUTH_TOKEN, "<present_but_redacted>")
     }
 
     val k8ClientConfig = k8ConfBuilder.build
@@ -172,6 +174,11 @@ private[spark] class Client(
             .done()
           kubernetesResourceCleaner.registerOrUpdateResource(submitServerSecret)
           val sslConfiguration = sslConfigurationProvider.getSslConfiguration()
+          val driverKubernetesSelectors = (Map(
+            SPARK_DRIVER_LABEL -> kubernetesAppId,
+            SPARK_APP_ID_LABEL -> kubernetesAppId,
+            SPARK_APP_NAME_LABEL -> appName)
+            ++ parsedCustomLabels)
           val (driverPod, driverService) = launchDriverKubernetesComponents(
             kubernetesClient,
             driverServiceManager,
@@ -191,8 +198,7 @@ private[spark] class Client(
             sslConfiguration,
             driverService,
             submitterLocalFiles,
-            submitterLocalJars,
-            driverPodKubernetesCredentials)
+            submitterLocalJars)
           // Now that the application has started, persist the components that were created beyond
           // the shutdown hook. We still want to purge the one-time secrets, so do not unregister
           // those.
@@ -239,8 +245,7 @@ private[spark] class Client(
       sslConfiguration: SslConfiguration,
       driverService: Service,
       submitterLocalFiles: Iterable[String],
-      submitterLocalJars: Iterable[String],
-      driverPodKubernetesCredentials: KubernetesCredentials): Unit = {
+      submitterLocalJars: Iterable[String]): Unit = {
     sparkConf.getOption("spark.app.id").foreach { id =>
       logWarning(s"Warning: Provided app id in spark.app.id as $id will be" +
         s" overridden as $kubernetesAppId")
@@ -252,12 +257,6 @@ private[spark] class Client(
     sparkConf.setIfMissing("spark.driver.port", DEFAULT_DRIVER_PORT.toString)
     sparkConf.setIfMissing("spark.blockmanager.port",
       DEFAULT_BLOCKMANAGER_PORT.toString)
-    sparkConf.get(KUBERNETES_SUBMIT_OAUTH_TOKEN).foreach { _ =>
-      sparkConf.set(KUBERNETES_SUBMIT_OAUTH_TOKEN, "<present_but_redacted>")
-    }
-    sparkConf.get(KUBERNETES_DRIVER_OAUTH_TOKEN).foreach { _ =>
-      sparkConf.set(KUBERNETES_DRIVER_OAUTH_TOKEN, "<present_but_redacted>")
-    }
     val driverSubmitter = buildDriverSubmissionClient(
       kubernetesClient,
       driverServiceManager,
@@ -267,10 +266,7 @@ private[spark] class Client(
     driverSubmitter.ping()
     logInfo(s"Submitting local resources to driver pod for application " +
       s"$kubernetesAppId ...")
-    val submitRequest = buildSubmissionRequest(
-      submitterLocalFiles,
-      submitterLocalJars,
-      driverPodKubernetesCredentials)
+    val submitRequest = buildSubmissionRequest(submitterLocalFiles, submitterLocalJars)
     driverSubmitter.submitApplication(submitRequest)
     logInfo("Successfully submitted local resources and driver configuration to" +
       " driver pod.")
@@ -453,7 +449,7 @@ private[spark] class Client(
             .endSecret()
           .endVolume()
         .addToVolumes(sslConfiguration.sslPodVolumes: _*)
-        .withServiceAccount(serviceAccount.getOrElse("default"))
+        .withServiceAccount(serviceAccount)
         .addNewContainer()
           .withName(DRIVER_CONTAINER_NAME)
           .withImage(driverDockerImage)
@@ -629,8 +625,7 @@ private[spark] class Client(
 
   private def buildSubmissionRequest(
       submitterLocalFiles: Iterable[String],
-      submitterLocalJars: Iterable[String],
-      driverPodKubernetesCredentials: KubernetesCredentials): KubernetesCreateSubmissionRequest = {
+      submitterLocalJars: Iterable[String]): KubernetesCreateSubmissionRequest = {
     val mainResourceUri = Utils.resolveURI(mainAppResource)
     val resolvedAppResource: AppResource = Option(mainResourceUri.getScheme)
         .getOrElse("file") match {
@@ -653,8 +648,7 @@ private[spark] class Client(
       secret = secretBase64String,
       sparkProperties = sparkConf.getAll.toMap,
       uploadedJarsBase64Contents = uploadJarsBase64Contents,
-      uploadedFilesBase64Contents = uploadFilesBase64Contents,
-      driverPodKubernetesCredentials = driverPodKubernetesCredentials)
+      uploadedFilesBase64Contents = uploadFilesBase64Contents)
   }
 
   private def buildDriverSubmissionClient(
