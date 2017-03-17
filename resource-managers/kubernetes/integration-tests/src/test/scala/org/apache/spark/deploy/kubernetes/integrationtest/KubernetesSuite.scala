@@ -135,7 +135,10 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
         .delete
     })
     // spark-submit sets system properties so we have to clear them
-    new SparkConf(true).getAll.map(_._1).foreach { System.clearProperty }
+    new SparkConf(true)
+      .getAll.map(_._1)
+      .filter(_ != "spark.docker.test.persistMinikube")
+      .foreach { System.clearProperty }
   }
 
   override def afterAll(): Unit = {
@@ -263,8 +266,8 @@ private[spark] class KubernetesSuite extends SparkFunSuite with BeforeAndAfter {
 
   test("Enable SSL on the driver submit server") {
     sparkConf.set(KUBERNETES_DRIVER_SUBMIT_KEYSTORE, s"file://${keyStoreFile.getAbsolutePath}")
-    sparkConf.set("spark.ssl.kubernetes.submit.keyStorePassword", "changeit")
-    sparkConf.set("spark.ssl.kubernetes.submit.keyPassword", "changeit")
+    sparkConf.set("spark.ssl.kubernetes.submission.keyStorePassword", "changeit")
+    sparkConf.set("spark.ssl.kubernetes.submission.keyPassword", "changeit")
     sparkConf.set(KUBERNETES_DRIVER_SUBMIT_TRUSTSTORE,
       s"file://${trustStoreFile.getAbsolutePath}")
     sparkConf.set(DRIVER_SUBMIT_SSL_ENABLED, true)

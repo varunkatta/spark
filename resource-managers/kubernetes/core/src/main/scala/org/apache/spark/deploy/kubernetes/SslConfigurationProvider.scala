@@ -49,7 +49,7 @@ private[spark] class SslConfigurationProvider(
     kubernetesResourceCleaner: KubernetesResourceCleaner) {
   private val SECURE_RANDOM = new SecureRandom()
   private val sslSecretsName = s"$SUBMISSION_SSL_SECRETS_PREFIX-$kubernetesAppId"
-  private val sslSecretsDirectory = DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR
+  private val sslSecretsDirectory = DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR +
     s"/$kubernetesAppId-ssl"
 
   def getSslConfiguration(): SslConfiguration = {

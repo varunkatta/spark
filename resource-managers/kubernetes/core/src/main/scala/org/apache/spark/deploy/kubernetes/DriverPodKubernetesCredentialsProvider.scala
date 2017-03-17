@@ -18,83 +18,49 @@ package org.apache.spark.deploy.kubernetes
 
 import java.io.File
 
-import com.google.common.base.Charsets
 import com.google.common.io.{BaseEncoding, Files}
-import io.fabric8.kubernetes.api.model.{Secret, SecretBuilder, Volume, VolumeBuilder, VolumeMount, VolumeMountBuilder}
-import scala.collection.JavaConverters._
 
-import org.apache.spark.{SparkConf, SparkException}
+import org.apache.spark.SparkConf
 import org.apache.spark.deploy.kubernetes.config._
-import org.apache.spark.deploy.kubernetes.constants._
+import org.apache.spark.deploy.rest.KubernetesCredentials
 import org.apache.spark.internal.config.OptionalConfigEntry
 
-private[spark] case class DriverPodKubernetesCredentials(
-  credentialsSecret: Secret,
-  credentialsSecretVolume: Volume,
-  credentialsSecretVolumeMount: VolumeMount)
+private[spark] class DriverPodKubernetesCredentialsProvider(sparkConf: SparkConf) {
 
-private[spark] class DriverPodKubernetesCredentialsProvider(
-    sparkConf: SparkConf,
-    kubernetesAppId: String) {
-
-  def getDriverPodKubernetesCredentials(): DriverPodKubernetesCredentials = {
-    val oauthTokenSecretMapping = sparkConf
-      .get(KUBERNETES_DRIVER_OAUTH_TOKEN)
-      .map(token => (DRIVER_CONTAINER_OAUTH_TOKEN_SECRET_NAME,
-         BaseEncoding.base64().encode(token.getBytes(Charsets.UTF_8))))
-    val caCertSecretMapping = convertFileConfToSecretMapping(KUBERNETES_DRIVER_CA_CERT_FILE,
-      DRIVER_CONTAINER_CA_CERT_FILE_SECRET_NAME)
-    val clientKeyFileSecretMapping = convertFileConfToSecretMapping(
-      KUBERNETES_DRIVER_CLIENT_KEY_FILE, DRIVER_CONTAINER_CLIENT_KEY_FILE_SECRET_NAME)
-    val clientCertFileSecretMapping = convertFileConfToSecretMapping(
-      KUBERNETES_DRIVER_CLIENT_CERT_FILE, DRIVER_CONTAINER_CLIENT_CERT_FILE_SECRET_NAME)
-    val secretData = (oauthTokenSecretMapping ++
-      caCertSecretMapping ++
-      clientKeyFileSecretMapping ++
-      clientCertFileSecretMapping).toMap
-    val credentialsSecret = new SecretBuilder()
-      .withNewMetadata()
-        .withName(s"$DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRET_NAME-$kubernetesAppId")
-        .endMetadata()
-      .withData(secretData.asJava)
-      .build()
-    val credentialsSecretVolume = new VolumeBuilder()
-      .withName(DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_VOLUME_NAME)
-      .withNewSecret()
-        .withSecretName(credentialsSecret.getMetadata.getName)
-        .endSecret()
-      .build()
-    val credentialsSecretVolumeMount = new VolumeMountBuilder()
-      .withName(credentialsSecretVolume.getName)
-      .withReadOnly(true)
-      .withMountPath(DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRETS_BASE_DIR)
-      .build()
-    // Cannot use both service account and mounted secrets
+  def get(): KubernetesCredentials = {
     sparkConf.get(KUBERNETES_SERVICE_ACCOUNT_NAME).foreach { _ =>
-      require(oauthTokenSecretMapping.isEmpty,
+      require(sparkConf.get(KUBERNETES_DRIVER_OAUTH_TOKEN).isEmpty,
         "Cannot specify both a service account and a driver pod OAuth token.")
-      require(caCertSecretMapping.isEmpty,
+      require(sparkConf.get(KUBERNETES_DRIVER_CA_CERT_FILE).isEmpty,
         "Cannot specify both a service account and a driver pod CA cert file.")
-      require(clientKeyFileSecretMapping.isEmpty,
+      require(sparkConf.get(KUBERNETES_DRIVER_CLIENT_KEY_FILE).isEmpty,
         "Cannot specify both a service account and a driver pod client key file.")
-      require(clientCertFileSecretMapping.isEmpty,
+      require(sparkConf.get(KUBERNETES_DRIVER_CLIENT_CERT_FILE).isEmpty,
         "Cannot specify both a service account and a driver pod client cert file.")
     }
-    DriverPodKubernetesCredentials(
-      credentialsSecret,
-      credentialsSecretVolume,
-      credentialsSecretVolumeMount)
+    val oauthToken = sparkConf.get(KUBERNETES_DRIVER_OAUTH_TOKEN)
+    val caCertDataBase64 = safeFileConfToBase64(KUBERNETES_DRIVER_CA_CERT_FILE,
+      s"Driver CA cert file provided at %s does not exist or is not a file.")
+    val clientKeyDataBase64 = safeFileConfToBase64(KUBERNETES_DRIVER_CLIENT_KEY_FILE,
+      s"Driver client key file provided at %s does not exist or is not a file.")
+    val clientCertDataBase64 = safeFileConfToBase64(KUBERNETES_DRIVER_CLIENT_CERT_FILE,
+      s"Driver client cert file provided at %s does not exist or is not a file.")
+    val serviceAccountName = sparkConf.get(KUBERNETES_SERVICE_ACCOUNT_NAME)
+    KubernetesCredentials(
+      oauthToken = oauthToken,
+      caCertDataBase64 = caCertDataBase64,
+      clientKeyDataBase64 = clientKeyDataBase64,
+      clientCertDataBase64 = clientCertDataBase64)
   }
 
-  private def convertFileConfToSecretMapping(
+  private def safeFileConfToBase64(
       conf: OptionalConfigEntry[String],
-      secretName: String): Option[(String, String)] = {
-    sparkConf.get(conf).map(new File(_)).map { file =>
-      if (!file.isFile()) {
-        throw new SparkException(s"File provided for ${conf.key} at ${file.getAbsolutePath}" +
-          s" does not exist or is not a file.")
+      fileNotFoundFormatString: String): Option[String] = {
+    sparkConf.get(conf)
+      .map(new File(_))
+      .map { file =>
+        require(file.isFile, String.format(fileNotFoundFormatString, file.getAbsolutePath))
+        BaseEncoding.base64().encode(Files.toByteArray(file))
       }
-      (secretName, BaseEncoding.base64().encode(Files.toByteArray(file)))
-    }
   }
 }
