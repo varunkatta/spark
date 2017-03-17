@@ -26,16 +26,6 @@ package object constants {
   // Secrets
   private[spark] val DRIVER_CONTAINER_SUBMISSION_SECRETS_BASE_DIR =
     "/var/run/secrets/spark-submission"
-  private[spark] val DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRETS_BASE_DIR =
-    "/var/run/secrets/kubernetes-credentials"
-  private[spark] val DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_SECRET_NAME =
-    "driver-kubernetes-credentials"
-  private[spark] val DRIVER_CONTAINER_KUBERNETES_CREDENTIALS_VOLUME_NAME =
-    "driver-kubernetes-credentials-volume"
-  private[spark] val DRIVER_CONTAINER_OAUTH_TOKEN_SECRET_NAME = "client-oauth-token"
-  private[spark] val DRIVER_CONTAINER_CLIENT_KEY_FILE_SECRET_NAME = "client-key"
-  private[spark] val DRIVER_CONTAINER_CLIENT_CERT_FILE_SECRET_NAME = "client-cert"
-  private[spark] val DRIVER_CONTAINER_CA_CERT_FILE_SECRET_NAME = "ca-cert"
   private[spark] val SUBMISSION_APP_SECRET_NAME = "spark-submission-server-secret"
   private[spark] val SUBMISSION_APP_SECRET_PREFIX = "spark-submission-server-secret"
   private[spark] val SUBMISSION_APP_SECRET_VOLUME_NAME = "spark-submission-secret-volume"
