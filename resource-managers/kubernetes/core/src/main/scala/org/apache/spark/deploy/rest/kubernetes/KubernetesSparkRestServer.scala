@@ -166,7 +166,6 @@ private[spark] class KubernetesSparkRestServer(
                 val resolvedAppResource = resolveAppResource(appResource, tempDir)
                 val writtenJars = writeUploadedJars(uploadedJars, tempDir)
                 val writtenFiles = writeUploadedFiles(uploadedFiles)
-
                 val resolvedSparkProperties = new mutable.HashMap[String, String]
                 resolvedSparkProperties ++= sparkProperties
                 val originalJars = sparkProperties.get("spark.jars")
