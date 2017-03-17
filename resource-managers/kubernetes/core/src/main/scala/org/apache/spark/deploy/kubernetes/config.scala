@@ -46,8 +46,8 @@ package object config {
       .stringConf
       .createWithDefault(s"spark-executor:$sparkVersion")
 
-  private val APISERVER_SUBMIT_CONF_PREFIX = "spark.kubernetes.authentication.submission"
-  private val APISERVER_DRIVER_CONF_PREFIX = "spark.kubernetes.authentication.driver"
+  private val APISERVER_SUBMIT_CONF_PREFIX = "spark.kubernetes.authenticate.submission"
+  private val APISERVER_DRIVER_CONF_PREFIX = "spark.kubernetes.authenticate.driver"
 
   private[spark] val KUBERNETES_SUBMIT_CA_CERT_FILE =
     ConfigBuilder(s"$APISERVER_SUBMIT_CONF_PREFIX.caCertFile")
@@ -151,7 +151,7 @@ package object config {
       .doc("Service account that is used when running the driver pod. The driver pod uses" +
         " this service account when requesting executor pods from the API server. If specific" +
         " credentials are given for the driver pod to use, the driver will favor" +
-        "using those credentials instead.")
+        " using those credentials instead.")
       .stringConf
       .createOptional
 

@@ -204,7 +204,7 @@ private[spark] class Client(
             throw e
         } finally {
           Utils.tryLogNonFatalError {
-//            kubernetesResourceCleaner.deleteAllRegisteredResourcesFromKubernetes(kubernetesClient)
+            kubernetesResourceCleaner.deleteAllRegisteredResourcesFromKubernetes(kubernetesClient)
           }
           Utils.tryLogNonFatalError {
             driverServiceManager.stop()

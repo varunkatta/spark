@@ -200,83 +200,83 @@ from the other deployment modes. See the [configuration page](configuration.html
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.submission.caCertFile</code></td>
+  <td><code>spark.kubernetes.authenticate.submission.caCertFile</code></td>
   <td>(none)</td>
   <td>
     Path to the CA cert file for connecting to the Kubernetes API server over TLS when starting the driver. This file
-    should be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not provide
+    must be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not provide
     a scheme).
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.submission.clientKeyFile</code></td>
+  <td><code>spark.kubernetes.authenticate.submission.clientKeyFile</code></td>
   <td>(none)</td>
   <td>
     Path to the client key file for authenticating against the Kubernetes API server when starting the driver. This file
-    should be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not provide
+    must be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not provide
     a scheme).
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.submission.clientCertFile</code></td>
+  <td><code>spark.kubernetes.authenticate.submission.clientCertFile</code></td>
   <td>(none)</td>
   <td>
     Path to the client cert file for authenticating against the Kubernetes API server when starting the driver. This
-    file should be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not
+    file must be located on the submitting machine's disk. Specify this as a path as opposed to a URI (i.e. do not
     provide a scheme).
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.submission.oauthToken</code></td>
+  <td><code>spark.kubernetes.authenticate.submission.oauthToken</code></td>
   <td>(none)</td>
   <td>
     OAuth token to use when authenticating against the Kubernetes API server when starting the driver. Note
-    that unlike the other authentication options, this should be the exact string value of the token to use for the
-    authentication.
+    that unlike the other authentication options, this is expected to be the exact string value of the token to use for
+    the authentication.
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.driver.caCertFile</code></td>
+  <td><code>spark.kubernetes.authenticate.driver.caCertFile</code></td>
   <td>(none)</td>
   <td>
     Path to the CA cert file for connecting to the Kubernetes API server over TLS from the driver pod when requesting
-    executors. This file should be located on the submitting machine's disk, and will be uploaded to the driver pod.
+    executors. This file must be located on the submitting machine's disk, and will be uploaded to the driver pod.
     Specify this as a path as opposed to a URI (i.e. do not provide a scheme).
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.driver.clientKeyFile</code></td>
+  <td><code>spark.kubernetes.authenticate.driver.clientKeyFile</code></td>
   <td>(none)</td>
   <td>
     Path to the client key file for authenticating against the Kubernetes API server from the driver pod when requesting
-    executors. This file should be located on the submitting machine's disk, and will be uploaded to the driver pod.
+    executors. This file must be located on the submitting machine's disk, and will be uploaded to the driver pod.
     Specify this as a path as opposed to a URI (i.e. do not provide a scheme). If this is specified, it is highly
     recommended to set up TLS for the driver submission server, as this value is sensitive information that would be
     passed to the driver pod in plaintext otherwise.
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.driver.clientCertFile</code></td>
+  <td><code>spark.kubernetes.authenticate.driver.clientCertFile</code></td>
   <td>(none)</td>
   <td>
     Path to the client cert file for authenticating against the Kubernetes API server from the driver pod when
-    requesting executors. This file should be located on the submitting machine's disk, and will be uploaded to the
+    requesting executors. This file must be located on the submitting machine's disk, and will be uploaded to the
     driver pod. Specify this as a path as opposed to a URI (i.e. do not provide a scheme).
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.driver.oauthToken</code></td>
+  <td><code>spark.kubernetes.authenticate.driver.oauthToken</code></td>
   <td>(none)</td>
   <td>
     OAuth token to use when authenticating against the against the Kubernetes API server from the driver pod when
-    requesting executors. Note that unlike the other authentication options, this should be the exact string value of
+    requesting executors. Note that unlike the other authentication options, this must be the exact string value of
     the token to use for the authentication. This token value is uploaded to the driver pod. If this is specified, it is
     highly recommended to set up TLS for the driver submission server, as this value is sensitive information that would
     be passed to the driver pod in plaintext otherwise.
   </td>
 </tr>
 <tr>
-  <td><code>spark.kubernetes.authentication.driver.serviceAccountName</code></td>
+  <td><code>spark.kubernetes.authenticate.driver.serviceAccountName</code></td>
   <td><code>default</code></td>
   <td>
     Service account that is used when running the driver pod. The driver pod uses this service account when requesting
