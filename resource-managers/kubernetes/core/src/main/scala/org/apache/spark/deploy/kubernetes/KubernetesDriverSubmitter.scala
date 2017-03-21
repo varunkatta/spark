@@ -41,7 +41,7 @@ private[spark] class KubernetesDriverSubmitter(
       driverSubmissionServerUris: Set[String],
       submissionSecret: String,
       submissionSparkConf: SparkConf,
-      submissionSslConfiguration: SslConfiguration): Unit = {
+      submissionSslConfiguration: DriverSubmitSslConfiguration): Unit = {
     val resolvedSparkConf = submissionSparkConf.clone()
     resolvedSparkConf.getOption("spark.app.id").foreach { id =>
       logWarning(s"Warning: Provided app id in spark.app.id as $id will be" +
