@@ -43,7 +43,7 @@ private[spark] class KubernetesDriverLifecycle(
     kubernetesAppId: String,
     kubernetesClient: KubernetesClient,
     sparkConf: SparkConf,
-    driverSslConfiguration: SslConfiguration,
+    driverSslConfiguration: DriverSubmitSslConfiguration,
     driverSubmitter: KubernetesDriverSubmitter)
   extends Logging {
 
@@ -120,7 +120,7 @@ private[spark] class KubernetesDriverLifecycle(
         val allComponentModels = Seq(
           driverPodModel,
           submitServerSecret,
-          driverServiceModel) ++ driverSslConfiguration.sslSecrets
+          driverServiceModel) ++ driverSslConfiguration.sslSecret
         Utils.tryWithResource(
             new KubernetesComponentReadiness(kubernetesClient, allComponentModels)) { readiness =>
           // Create the driver pod separately on the remote so that it can be assigned a UID. The
@@ -144,7 +144,7 @@ private[spark] class KubernetesDriverLifecycle(
                   kubernetesClient.secrets().delete(submitServerSecret)
                 }
                 Utils.tryLogNonFatalError {
-                  kubernetesClient.secrets().delete(driverSslConfiguration.sslSecrets: _*)
+                  kubernetesClient.secrets().delete(driverSslConfiguration.sslSecret.toSeq: _*)
                 }
                 val driverServiceFromServer = kubernetesClient
                   .services()
@@ -208,7 +208,7 @@ private[spark] class KubernetesDriverLifecycle(
       .addToOwnerReferences(driverPodOwnerRef)
       .endMetadata()
       .build()
-    val withOwnerReferencesSslSecrets = driverSslConfiguration.sslSecrets.map(secret => {
+    val withOwnerReferencesSslSecrets = driverSslConfiguration.sslSecret.map(secret => {
       new SecretBuilder(secret)
         .editMetadata()
         .addToOwnerReferences(driverPodOwnerRef)
@@ -238,7 +238,7 @@ private[spark] class KubernetesDriverLifecycle(
   private def buildDriverPodModel(submitServerSecret: Secret): Pod = {
     val containerPorts = buildContainerPorts()
     val probePingHttpGet = new HTTPGetActionBuilder()
-      .withScheme(if (driverSslConfiguration.sslOptions.enabled) "HTTPS" else "HTTP")
+      .withScheme(if (driverSslConfiguration.enabled) "HTTPS" else "HTTP")
       .withPath("/v1/submissions/ping")
       .withNewPort(SUBMISSION_SERVER_PORT_NAME)
       .build()
@@ -260,7 +260,7 @@ private[spark] class KubernetesDriverLifecycle(
           .withName(SUBMISSION_APP_SECRET_VOLUME_NAME)
           .withNewSecret().withSecretName(submitServerSecret.getMetadata.getName).endSecret()
           .endVolume()
-        .addToVolumes(driverSslConfiguration.sslPodVolumes: _*)
+        .addToVolumes(driverSslConfiguration.sslPodVolume.toSeq: _*)
         .withServiceAccount(serviceAccount.getOrElse("default"))
         .addNewContainer()
           .withName(DRIVER_CONTAINER_NAME)
@@ -271,7 +271,7 @@ private[spark] class KubernetesDriverLifecycle(
             .withMountPath(secretDirectory)
             .withReadOnly(true)
             .endVolumeMount()
-          .addToVolumeMounts(driverSslConfiguration.sslPodVolumeMounts: _*)
+          .addToVolumeMounts(driverSslConfiguration.sslPodVolumeMount.toSeq: _*)
           .addNewEnv()
             .withName(ENV_SUBMISSION_SECRET_LOCATION)
             .withValue(s"$secretDirectory/$SUBMISSION_APP_SECRET_NAME")
