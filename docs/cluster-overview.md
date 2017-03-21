@@ -53,6 +53,11 @@ The system currently supports three cluster managers:
   and service applications.
 * [Hadoop YARN](running-on-yarn.html) -- the resource manager in Hadoop 2.
 
+In addition to the above, there is experimental support for Kubernetes.
+[Kubernetes](https://kubernetes.io/) is an open-source platform for providing container-centric infrastructure.
+Kubernetes support is being actively developed in a [Spark-Kubernetes](https://github.com/apache-spark-on-k8s/spark)
+fork and will eventually merge into the Apache Spark project. For documentation,
+refer to the project [README](https://github.com/apache-spark-on-k8s/spark/blob/branch-2.1-kubernetes/README.md).
 
 # Submitting Applications
 
