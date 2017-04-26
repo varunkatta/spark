@@ -17,11 +17,13 @@
 package org.apache.spark.deploy.kubernetes
 
 import java.io.File
+import java.util.concurrent.{ThreadFactory, ThreadPoolExecutor}
 
 import com.google.common.base.Charsets
 import com.google.common.io.Files
+import io.fabric8.kubernetes.client.utils.HttpClientUtils
 import io.fabric8.kubernetes.client.{Config, ConfigBuilder, DefaultKubernetesClient}
-
+import okhttp3.Dispatcher
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
@@ -78,6 +80,25 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
       }
       serviceAccountConfigBuilder
     }
-    new DefaultKubernetesClient(configBuilder.build)
+    val threadPoolExecutor = new Dispatcher().executorService().asInstanceOf[ThreadPoolExecutor]
+    // Set threads to be daemons in order to allow the driver main thread
+    // to shut down upon errors. Otherwise the driver will hang indefinitely.
+    threadPoolExecutor.setThreadFactory(new ThreadFactory {
+      override def newThread(r: Runnable): Thread = {
+        val thread = new Thread(r, "spark-on-k8s")
+        thread.setDaemon(true)
+        thread
+      }
+    })
+    // Disable the ping thread that is not daemon, in order to allow
+    // the driver main thread to shut down upon errors. Otherwise, the driver
+    // will hang indefinitely.
+    val config = configBuilder
+      .withWebsocketPingInterval(0)
+      .build()
+    val httpClient = HttpClientUtils.createHttpClient(config).newBuilder()
+      .dispatcher(new Dispatcher(threadPoolExecutor))
+      .build()
+    new DefaultKubernetesClient(httpClient, config)
   }
 }
