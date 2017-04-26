@@ -17,11 +17,13 @@
 package org.apache.spark.deploy.kubernetes
 
 import java.io.File
+import java.util.concurrent.{ThreadFactory, ThreadPoolExecutor}
 
 import com.google.common.base.Charsets
 import com.google.common.io.Files
+import io.fabric8.kubernetes.client.utils.HttpClientUtils
 import io.fabric8.kubernetes.client.{Config, ConfigBuilder, DefaultKubernetesClient}
-
+import okhttp3.Dispatcher
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
@@ -35,9 +37,9 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
   private val clientCertFile = sparkConf.get(KUBERNETES_DRIVER_MOUNTED_CLIENT_CERT_FILE)
 
   /**
-   * Creates a {@link KubernetesClient}, expecting to be from within the context of a pod. When
-   * doing so, service account token files can be picked up from canonical locations.
-   */
+    * Creates a {@link KubernetesClient}, expecting to be from within the context of a pod. When
+    * doing so, service account token files can be picked up from canonical locations.
+    */
   def buildFromWithinPod(): DefaultKubernetesClient = {
     val baseClientConfigBuilder = new ConfigBuilder()
       .withApiVersion("v1")
@@ -45,27 +47,27 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
       .withNamespace(namespace)
 
     val configBuilder = oauthTokenFile
-        .orElse(caCertFile)
-        .orElse(clientKeyFile)
-        .orElse(clientCertFile)
-        .map { _ =>
-      var mountedAuthConfigBuilder = baseClientConfigBuilder
-      oauthTokenFile.foreach { tokenFilePath =>
-        val tokenFile = new File(tokenFilePath)
-        mountedAuthConfigBuilder = mountedAuthConfigBuilder
-          .withOauthToken(Files.toString(tokenFile, Charsets.UTF_8))
-      }
-      caCertFile.foreach { caFile =>
-        mountedAuthConfigBuilder = mountedAuthConfigBuilder.withCaCertFile(caFile)
-      }
-      clientKeyFile.foreach { keyFile =>
-        mountedAuthConfigBuilder = mountedAuthConfigBuilder.withClientKeyFile(keyFile)
-      }
-      clientCertFile.foreach { certFile =>
-        mountedAuthConfigBuilder = mountedAuthConfigBuilder.withClientCertFile(certFile)
-      }
-      mountedAuthConfigBuilder
-    }.getOrElse {
+      .orElse(caCertFile)
+      .orElse(clientKeyFile)
+      .orElse(clientCertFile)
+      .map { _ =>
+        var mountedAuthConfigBuilder = baseClientConfigBuilder
+        oauthTokenFile.foreach { tokenFilePath =>
+          val tokenFile = new File(tokenFilePath)
+          mountedAuthConfigBuilder = mountedAuthConfigBuilder
+            .withOauthToken(Files.toString(tokenFile, Charsets.UTF_8))
+        }
+        caCertFile.foreach { caFile =>
+          mountedAuthConfigBuilder = mountedAuthConfigBuilder.withCaCertFile(caFile)
+        }
+        clientKeyFile.foreach { keyFile =>
+          mountedAuthConfigBuilder = mountedAuthConfigBuilder.withClientKeyFile(keyFile)
+        }
+        clientCertFile.foreach { certFile =>
+          mountedAuthConfigBuilder = mountedAuthConfigBuilder.withClientCertFile(certFile)
+        }
+        mountedAuthConfigBuilder
+      }.getOrElse {
       var serviceAccountConfigBuilder = baseClientConfigBuilder
       if (SERVICE_ACCOUNT_CA_CERT.isFile) {
         serviceAccountConfigBuilder = serviceAccountConfigBuilder.withCaCertFile(
@@ -78,6 +80,25 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
       }
       serviceAccountConfigBuilder
     }
-    new DefaultKubernetesClient(configBuilder.build)
+    val threadPoolExecutor = new Dispatcher().executorService().asInstanceOf[ThreadPoolExecutor]
+    // Set threads to be daemons in order to allow the driver main thread
+    // to shut down upon errors. Otherwise the driver will hang indefinitely.
+    threadPoolExecutor.setThreadFactory(new ThreadFactory {
+      override def newThread(r: Runnable): Thread = {
+        val thread = new Thread(r, "spark-on-k8s")
+        thread.setDaemon(true)
+        thread
+      }
+    })
+    // Disable the ping thread that is not daemon, in order to allow
+    // the driver main thread to shut down upon errors. Otherwise, the driver
+    // will hang indefinitely.
+    val config = configBuilder
+      .withWebsocketPingInterval(0)
+      .build()
+    val httpClient = HttpClientUtils.createHttpClient(config).newBuilder()
+      .dispatcher(new Dispatcher(threadPoolExecutor))
+      .build()
+    new DefaultKubernetesClient(httpClient, config)
   }
 }
