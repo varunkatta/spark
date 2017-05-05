@@ -25,17 +25,16 @@ import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 
 import io.fabric8.kubernetes.api.model._
-import io.fabric8.kubernetes.client.Watcher.Action
 import io.fabric8.kubernetes.client.{KubernetesClientException, Watcher}
+import io.fabric8.kubernetes.client.Watcher.Action
 
-import org.apache.spark.deploy.kubernetes.KubernetesClientBuilder
+import org.apache.spark.{SparkContext, SparkException}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointAddress, RpcEnv}
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend
 import org.apache.spark.util.{ThreadUtils, Utils}
-import org.apache.spark.{SparkContext, SparkException}
 
 private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerImpl,
                                                        val sc: SparkContext)
@@ -95,7 +94,7 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
       throw new SparkException(s"Executor cannot find driver pod", throwable)
   }
 
-  override val minRegisteredRatio =
+  override val minRegisteredRatio: Double =
     if (conf.getOption("spark.scheduler.minRegisteredResourcesRatio").isEmpty) {
       0.8
     } else {
@@ -113,7 +112,7 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
     sc.getConf.getInt("spark.driver.port", DEFAULT_DRIVER_PORT),
     CoarseGrainedSchedulerBackend.ENDPOINT_NAME).toString
 
-  private val initialExecutors = getInitialTargetExecutorNumber(1)
+  private val initialExecutors = getInitialTargetExecutorNumber()
 
   private def getInitialTargetExecutorNumber(defaultNumExecutors: Int = 1): Int = {
     if (Utils.isDynamicAllocationEnabled(conf)) {
@@ -144,7 +143,7 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
       doRequestTotalExecutors(initialExecutors)
     }
     executorCleanupScheduler.scheduleWithFixedDelay(executorRecoveryRunnable, 0,
-      TimeUnit.SECONDS.toMillis(10), TimeUnit.MILLISECONDS)
+      TimeUnit.SECONDS.toMillis(5), TimeUnit.MILLISECONDS)
   }
 
   override def stop(): Unit = {
@@ -266,7 +265,6 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
 
   override def doRequestTotalExecutors(requestedTotal: Int): Future[Boolean] = Future[Boolean] {
     RUNNING_EXECUTOR_PODS_LOCK.synchronized {
-      logInfo("$requestedTotal is $requestedTotal")
       if (requestedTotal > totalExpectedExecutors.get) {
         logInfo(s"Requesting ${
           requestedTotal - totalExpectedExecutors.get
@@ -305,12 +303,12 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
     override def eventReceived(action: Action, pod: Pod): Unit = {
       if (action == Action.ERROR) {
         val podName = pod.getMetadata.getName
-        logDebug(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
+        logInfo(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
         handleErroredPod(pod)
       }
       else if (action == Action.DELETED) {
         val podName = pod.getMetadata.getName
-        logDebug(s"Received delete pod $podName event. Reason: " + pod.getStatus.getReason)
+        logInfo(s"Received delete pod $podName event. Reason: " + pod.getStatus.getReason)
         handleDeletedPod(pod)
       }
     }
@@ -332,15 +330,17 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
     }
 
     def handleErroredPod(pod: Pod): Unit = {
-      val alreadyReleased = RUNNING_EXECUTOR_PODS_LOCK.synchronized {
-        runningPodsToExecutors.keySet.foreach(runningPod =>
-          if (runningPod.getMetadata.getName == pod.getMetadata.getName) {
-            return false
-          }
-        )
+      def isPodAlreadyReleased(pod: Pod): Boolean = {
+        RUNNING_EXECUTOR_PODS_LOCK.synchronized {
+          runningPodsToExecutors.keySet.foreach(runningPod =>
+            if (runningPod.getMetadata.getName == pod.getMetadata.getName) {
+              return false
+            }
+          )
+        }
         true
       }
-
+      val alreadyReleased = isPodAlreadyReleased(pod)
       val containerExitStatus = getContainerExitStatus(pod)
       // container was probably actively killed by the driver.
       val exitReason = if (alreadyReleased) {
@@ -393,12 +393,10 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
   private val executorRecoveryRunnable: Runnable = new Runnable {
 
     private val MAX_EXECUTOR_LOST_REASON_CHECKS = 10
-    private val MAX_ALLOWED_EXECUTOR_RECOVERY_ATTEMPTS = 100
     private val executorsToRecover = new mutable.HashSet[String]
-    private val executorAttempts = new mutable.HashMap[String, Int]
-    private var recoveredExecutorCount = 0
+    private val executorReasonChecks = new mutable.HashMap[String, Int]
 
-    override def run() = removeFailedAndRequestNewExecutors()
+    override def run(): Unit = removeFailedAndRequestNewExecutors()
 
     def removeFailedAndRequestNewExecutors(): Unit = {
       val localRunningExecutorsToPods = RUNNING_EXECUTOR_PODS_LOCK.synchronized {
@@ -428,28 +426,27 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
             removeExecutorOrIncrementLossReasonCheckCount(executorId)
         }
       }
-
       executorsToRecover.foreach(executorId =>
         EXECUTORS_TO_REMOVE_LOCK.synchronized {
           executorsToRemove -= executorId
-          executorAttempts -= executorId
+          executorReasonChecks -= executorId
         }
       )
-      if (executorsToRecover.nonEmpty &&
-        recoveredExecutorCount < MAX_ALLOWED_EXECUTOR_RECOVERY_ATTEMPTS) {
+      if (executorsToRecover.nonEmpty) {
         requestExecutors(executorsToRecover.size)
-        recoveredExecutorCount += executorsToRecover.size
       }
       executorsToRecover.clear()
     }
 
+
     def removeExecutorOrIncrementLossReasonCheckCount(executorId: String): Unit = {
-      val reasonCheckCount = executorAttempts.getOrElse(executorId, 0)
+      val reasonCheckCount = executorReasonChecks.getOrElse(executorId, 0)
       if (reasonCheckCount > MAX_EXECUTOR_LOST_REASON_CHECKS) {
         removeExecutor(executorId, SlaveLost("Executor lost for unknown reasons"))
         executorsToRecover.add(executorId)
+        executorReasonChecks -= executorId
       } else {
-        executorAttempts.put(executorId, reasonCheckCount + 1)
+        executorReasonChecks.put(executorId, reasonCheckCount + 1)
       }
     }
   }
@@ -458,10 +455,8 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
 private object KubernetesClusterSchedulerBackend {
   private val DEFAULT_STATIC_PORT = 10000
   private val EXECUTOR_ID_COUNTER = new AtomicLong(0L)
-
-  val MEM_REGEX = "[0-9.]+ [KMG]B"
-  val VMEM_EXCEEDED_EXIT_CODE = -103
-  val PMEM_EXCEEDED_EXIT_CODE = -104
+  private val VMEM_EXCEEDED_EXIT_CODE = -103
+  private val PMEM_EXCEEDED_EXIT_CODE = -104
 
   def memLimitExceededLogMessage(diagnostics: String): String = {
     s"Pod/Container killed for exceeding memory limits.$diagnostics" +
