@@ -56,11 +56,6 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
   private val blockmanagerPort = conf
     .getInt("spark.blockmanager.port", DEFAULT_BLOCKMANAGER_PORT)
 
-  private val kubernetesDriverServiceName = conf
-    .get(KUBERNETES_DRIVER_SERVICE_NAME)
-    .getOrElse(
-      throw new SparkException("Must specify the service name the driver is running with"))
-
   private val kubernetesDriverPodName = conf
     .get(KUBERNETES_DRIVER_POD_NAME)
     .getOrElse(
@@ -161,11 +156,6 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
       }
     } catch {
       case e: Throwable => logError("Uncaught exception while shutting down controllers.", e)
-    }
-    try {
-      kubernetesClient.services().withName(kubernetesDriverServiceName).delete()
-    } catch {
-      case e: Throwable => logError("Uncaught exception while shutting down driver service.", e)
     }
     try {
       logInfo("Closing kubernetes client")
@@ -344,20 +334,21 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
       val containerExitStatus = getContainerExitStatus(pod)
       // container was probably actively killed by the driver.
       val exitReason = if (alreadyReleased) {
-        ExecutorExited(containerExitStatus, exitCausedByApp = false,
-          s"Container in pod " + pod.getMetadata.getName +
-            " exited from explicit termination request.")
-      } else {
-        val containerExitReason = containerExitStatus match {
-          case VMEM_EXCEEDED_EXIT_CODE | PMEM_EXCEEDED_EXIT_CODE =>
-            memLimitExceededLogMessage(pod.getStatus.getReason)
-          case _ =>
-            // Here we can't be sure that that exit was caused by the application but this seems to
-            // be the right default since we know the pod was not explicitly deleted by the user.
-            "Pod exited with following container exit status code " + containerExitStatus
+          ExecutorExited(containerExitStatus, exitCausedByApp = false,
+            s"Container in pod " + pod.getMetadata.getName +
+              " exited from explicit termination request.")
+        } else {
+          val containerExitReason = containerExitStatus match {
+            case VMEM_EXCEEDED_EXIT_CODE | PMEM_EXCEEDED_EXIT_CODE =>
+              memLimitExceededLogMessage(pod.getStatus.getReason)
+            case _ =>
+              // Here we can't be sure that that exit was caused by the application but this seems
+              // to be the right default since we know the pod was not explicitly deleted by
+              // the user.
+              "Pod exited with following container exit status code " + containerExitStatus
+          }
+          ExecutorExited(containerExitStatus, exitCausedByApp = true, containerExitReason)
         }
-        ExecutorExited(containerExitStatus, exitCausedByApp = true, containerExitReason)
-      }
       FAILED_PODS_LOCK.synchronized {
         failedPods.put(pod.getMetadata.getName, exitReason)
       }
