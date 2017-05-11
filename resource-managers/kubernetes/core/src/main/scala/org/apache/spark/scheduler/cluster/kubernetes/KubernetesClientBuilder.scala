@@ -89,6 +89,8 @@ private[spark] class KubernetesClientBuilder(sparkConf: SparkConf, namespace: St
       .withWebsocketPingInterval(0)
       .build()
     val httpClient = HttpClientUtils.createHttpClient(config).newBuilder()
+      // Use a Dispatcher with a custom executor service that creates daemon threads. The default
+      // executor service used by Dispatcher creates non-daemon threads.
       .dispatcher(new Dispatcher(ThreadUtils.newDaemonCachedThreadPool("spark-on-k8s")))
       .build()
     new DefaultKubernetesClient(httpClient, config)

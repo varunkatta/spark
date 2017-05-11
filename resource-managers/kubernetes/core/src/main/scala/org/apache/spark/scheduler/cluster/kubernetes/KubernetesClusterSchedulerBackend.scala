@@ -45,6 +45,8 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
   private val RUNNING_EXECUTOR_PODS_LOCK = new Object
   private val runningExecutorsToPods = new mutable.HashMap[String, Pod] // Indexed by executor IDs.
   private val runningPodsToExecutors = new mutable.HashMap[Pod, String] // Indexed by executor Pods.
+  private val EXECUTOR_PODS_BY_IPS_LOCK = new Object
+  private val executorPodsByIPs = new mutable.HashMap[String, Pod] // Indexed by executor IP addrs.
   private val FAILED_PODS_LOCK = new Object
   private val failedPods = new mutable.HashMap[String, ExecutorLossReason] // Indexed by pod names.
   private val EXECUTORS_TO_REMOVE_LOCK = new Object
@@ -149,6 +151,9 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
       RUNNING_EXECUTOR_PODS_LOCK.synchronized {
         runningExecutorsToPods.values.foreach(kubernetesClient.pods().delete(_))
         runningPodsToExecutors.clear()
+      }
+      EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
+        executorPodsByIPs.clear()
       }
       val resource = executorWatchResource.getAndSet(null)
       if (resource != null) {
@@ -286,20 +291,44 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
     true
   }
 
+  def getExecutorPodByIP(podIP: String): Option[Pod] = {
+    EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
+      executorPodsByIPs.get(podIP)
+    }
+  }
+
   private class ExecutorPodsWatcher extends Watcher[Pod] {
 
     private val DEFAULT_CONTAINER_FAILURE_EXIT_STATUS = -1
 
     override def eventReceived(action: Action, pod: Pod): Unit = {
-      if (action == Action.ERROR) {
+
+      if (action == Action.MODIFIED && pod.getStatus.getPhase == "Running"
+        && pod.getMetadata.getDeletionTimestamp == null) {
+        val podIP = pod.getStatus.getPodIP
+        val clusterNodeName = pod.getSpec.getNodeName
+        logDebug(s"Executor pod $pod ready, launched at $clusterNodeName as IP $podIP.")
+        EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
+          executorPodsByIPs += ((podIP, pod))
+        }
+      } else if ((action == Action.MODIFIED && pod.getMetadata.getDeletionTimestamp != null) ||
+        action == Action.DELETED || action == Action.ERROR) {
         val podName = pod.getMetadata.getName
-        logInfo(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
-        handleErroredPod(pod)
-      }
-      else if (action == Action.DELETED) {
-        val podName = pod.getMetadata.getName
-        logInfo(s"Received delete pod $podName event. Reason: " + pod.getStatus.getReason)
-        handleDeletedPod(pod)
+        val podIP = pod.getStatus.getPodIP
+        logDebug(s"Executor pod $podName at IP $podIP was at $action.")
+        if (podIP != null) {
+          EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
+            executorPodsByIPs -= podIP
+          }
+        }
+        if (action == Action.ERROR) {
+          logInfo(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
+          handleErroredPod(pod)
+        }
+        else if (action == Action.DELETED) {
+          logInfo(s"Received delete pod $podName event. Reason: " + pod.getStatus.getReason)
+          handleDeletedPod(pod)
+        }
       }
     }
 
