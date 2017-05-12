@@ -20,15 +20,15 @@ import java.io.Closeable
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
 import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
-
 import org.apache.spark.{SparkContext, SparkException}
+
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointAddress, RpcEnv}
@@ -36,8 +36,9 @@ import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend
 import org.apache.spark.util.{ThreadUtils, Utils}
 
-private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerImpl,
-                                                       val sc: SparkContext)
+private[spark] class KubernetesClusterSchedulerBackend(
+    scheduler: TaskSchedulerImpl,
+    val sc: SparkContext)
   extends CoarseGrainedSchedulerBackend(scheduler, sc.env.rpcEnv) {
 
   import KubernetesClusterSchedulerBackend._
@@ -337,9 +338,9 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
     }
 
     def getContainerExitStatus(pod: Pod): Int = {
-      val containerStatuses = pod.getStatus.getContainerStatuses.asScala
-      for (containerStatus <- containerStatuses) {
-        return getContainerExitStatus(containerStatus)
+      val containerStatuses = pod.getStatus.getContainerStatuses
+      if (!containerStatuses.isEmpty) {
+        return getContainerExitStatus(containerStatuses.get(0))
       }
       DEFAULT_CONTAINER_FAILURE_EXIT_STATUS
     }
@@ -385,7 +386,7 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
 
     def handleDeletedPod(pod: Pod): Unit = {
       val exitReason = ExecutorExited(getContainerExitStatus(pod), exitCausedByApp = false,
-        "Pod " + pod.getMetadata.getName + " deleted by K8s master")
+        "Pod " + pod.getMetadata.getName + " deleted or lost.")
       FAILED_PODS_LOCK.synchronized {
         failedPods.put(pod.getMetadata.getName, exitReason)
       }
@@ -414,6 +415,8 @@ private[spark] class KubernetesClusterSchedulerBackend(scheduler: TaskSchedulerI
 
     private val MAX_EXECUTOR_LOST_REASON_CHECKS = 10
     private val executorsToRecover = new mutable.HashSet[String]
+    // Maintains a map of executor id to count of checks performed to learn the loss reason
+    // for an executor.
     private val executorReasonChecks = new mutable.HashMap[String, Int]
 
     override def run(): Unit = removeFailedAndRequestNewExecutors()
@@ -479,7 +482,7 @@ private object KubernetesClusterSchedulerBackend {
   private val PMEM_EXCEEDED_EXIT_CODE = -104
 
   def memLimitExceededLogMessage(diagnostics: String): String = {
-    s"Pod/Container killed for exceeding memory limits.$diagnostics" +
+    s"Pod/Container killed for exceeding memory limits. $diagnostics" +
       " Consider boosting spark executor memory overhead."
   }
 }
