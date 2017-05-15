@@ -27,8 +27,8 @@ import scala.concurrent.{ExecutionContext, Future}
 import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
-import org.apache.spark.{SparkContext, SparkException}
 
+import org.apache.spark.{SparkContext, SparkException}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointAddress, RpcEnv}
