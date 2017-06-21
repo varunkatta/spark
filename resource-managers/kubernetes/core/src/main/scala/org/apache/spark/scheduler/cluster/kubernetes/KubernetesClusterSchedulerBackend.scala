@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
-import io.fabric8.kubernetes.api.model.{ContainerPortBuilder, ContainerStatus, EnvVarBuilder, EnvVarSourceBuilder, Pod, PodBuilder, QuantityBuilder}
+import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClient, KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
 import org.apache.commons.io.FilenameUtils
@@ -32,6 +32,7 @@ import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
 import org.apache.spark.{SparkContext, SparkEnv, SparkException}
+
 import org.apache.spark.deploy.kubernetes.{ConfigurationUtils, SparkPodInitContainerBootstrap}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
@@ -212,7 +213,6 @@ private[spark] class KubernetesClusterSchedulerBackend(
     }
 
     def removeFailedExecutors(): Unit = {
-      removeFailedExecutors()
       val localRunningExecutorsToPods = RUNNING_EXECUTOR_PODS_LOCK.synchronized {
         runningExecutorsToPods.toMap
       }
@@ -626,7 +626,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
     }
 
     def getContainerExitStatus(containerStatus: ContainerStatus): Int = {
-      containerStatus.getState.getTerminated.getExitCode.intValue
+      containerStatus.getState match {
+        case null => UNKNOWN_EXIT_CODE
+        case _ => containerStatus.getState.getTerminated match {
+          case null => UNKNOWN_EXIT_CODE
+          case _ => containerStatus.getState.getTerminated.getExitCode.intValue()
+        }
+      }
     }
 
     def handleErroredPod(pod: Pod): Unit = {
@@ -744,6 +750,7 @@ private object KubernetesClusterSchedulerBackend {
   private val EXECUTOR_ID_COUNTER = new AtomicLong(0L)
   private val VMEM_EXCEEDED_EXIT_CODE = -103
   private val PMEM_EXCEEDED_EXIT_CODE = -104
+  private val UNKNOWN_EXIT_CODE = -111
 
   def memLimitExceededLogMessage(diagnostics: String): String = {
     s"Pod/Container killed for exceeding memory limits. $diagnostics" +
