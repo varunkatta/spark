@@ -16,6 +16,8 @@
  */
 package org.apache.spark.deploy.kubernetes.submit
 
+import io.fabric8.kubernetes.api.model.ConfigMap
+
 import org.apache.spark.{SparkConf, SSLOptions}
 import org.apache.spark.deploy.kubernetes.{InitContainerResourceStagingServerSecretPluginImpl, OptionRequirements, SparkPodInitContainerBootstrap, SparkPodInitContainerBootstrapImpl}
 import org.apache.spark.deploy.kubernetes.config._
@@ -30,17 +32,17 @@ import org.apache.spark.util.Utils
  */
 private[spark] trait DriverInitContainerComponentsProvider {
 
-  def provideInitContainerConfigMapBuilder(
-      maybeSubmittedResourceIds: Option[SubmittedResourceIds])
-      : SparkInitContainerConfigMapBuilder
-  def provideContainerLocalizedFilesResolver(): ContainerLocalizedFilesResolver
-  def provideExecutorInitContainerConfiguration(): ExecutorInitContainerConfiguration
+  def provideContainerLocalizedFilesResolver(
+      mainAppResource: String): ContainerLocalizedFilesResolver
   def provideInitContainerSubmittedDependencyUploader(
       driverPodLabels: Map[String, String]): Option[SubmittedDependencyUploader]
   def provideSubmittedDependenciesSecretBuilder(
       maybeSubmittedResourceSecrets: Option[SubmittedResourceSecrets])
       : Option[SubmittedDependencySecretBuilder]
   def provideInitContainerBootstrap(): SparkPodInitContainerBootstrap
+  def provideDriverPodFileMounter(): DriverPodKubernetesFileMounter
+  def provideInitContainerBundle(maybeSubmittedResourceIds: Option[SubmittedResourceIds],
+      uris: Iterable[String]): Option[InitContainerBundle]
 }
 
 private[spark] class DriverInitContainerComponentsProviderImpl(
@@ -49,6 +51,7 @@ private[spark] class DriverInitContainerComponentsProviderImpl(
       namespace: String,
       sparkJars: Seq[String],
       sparkFiles: Seq[String],
+      pySparkFiles: Seq[String],
       resourceStagingServerExternalSslOptions: SSLOptions)
     extends DriverInitContainerComponentsProvider {
 
@@ -104,10 +107,10 @@ private[spark] class DriverInitContainerComponentsProviderImpl(
   private val initContainerImage = sparkConf.get(INIT_CONTAINER_DOCKER_IMAGE)
   private val dockerImagePullPolicy = sparkConf.get(DOCKER_IMAGE_PULL_POLICY)
   private val downloadTimeoutMinutes = sparkConf.get(INIT_CONTAINER_MOUNT_TIMEOUT)
+  private val pySparkSubmitted = KubernetesFileUtils.getOnlySubmitterLocalFiles(pySparkFiles)
 
-  override def provideInitContainerConfigMapBuilder(
-      maybeSubmittedResourceIds: Option[SubmittedResourceIds])
-      : SparkInitContainerConfigMapBuilder = {
+  private def provideInitContainerConfigMap(
+      maybeSubmittedResourceIds: Option[SubmittedResourceIds]): ConfigMap = {
     val submittedDependencyConfigPlugin = for {
       stagingServerUri <- maybeResourceStagingServerUri
       jarsResourceId <- maybeSubmittedResourceIds.map(_.jarsResourceId)
@@ -131,20 +134,21 @@ private[spark] class DriverInitContainerComponentsProviderImpl(
     }
     new SparkInitContainerConfigMapBuilderImpl(
         sparkJars,
-        sparkFiles,
+        sparkFiles ++ pySparkSubmitted,
         jarsDownloadPath,
         filesDownloadPath,
         configMapName,
         configMapKey,
-        submittedDependencyConfigPlugin)
+        submittedDependencyConfigPlugin).build()
   }
 
-  override def provideContainerLocalizedFilesResolver(): ContainerLocalizedFilesResolver = {
+  override def provideContainerLocalizedFilesResolver(mainAppResource: String)
+    : ContainerLocalizedFilesResolver = {
     new ContainerLocalizedFilesResolverImpl(
-        sparkJars, sparkFiles, jarsDownloadPath, filesDownloadPath)
+        sparkJars, sparkFiles, pySparkFiles, mainAppResource, jarsDownloadPath, filesDownloadPath)
   }
 
-  override def provideExecutorInitContainerConfiguration(): ExecutorInitContainerConfiguration = {
+  private def provideExecutorInitContainerConfiguration(): ExecutorInitContainerConfiguration = {
     new ExecutorInitContainerConfigurationImpl(
         maybeSecretName,
         INIT_CONTAINER_SECRET_VOLUME_MOUNT_PATH,
@@ -160,7 +164,7 @@ private[spark] class DriverInitContainerComponentsProviderImpl(
           namespace,
           stagingServerUri,
           sparkJars,
-          sparkFiles,
+          sparkFiles ++ pySparkSubmitted,
           resourceStagingServerExternalSslOptions,
           RetrofitClientFactoryImpl)
     }
@@ -201,5 +205,19 @@ private[spark] class DriverInitContainerComponentsProviderImpl(
         configMapName,
         configMapKey,
         resourceStagingServerSecretPlugin)
+  }
+  override def provideDriverPodFileMounter(): DriverPodKubernetesFileMounter = {
+    new DriverPodKubernetesFileMounterImpl()
+  }
+  override def provideInitContainerBundle(
+      maybeSubmittedResourceIds: Option[SubmittedResourceIds],
+      uris: Iterable[String]): Option[InitContainerBundle] = {
+    // Bypass init-containers if `spark.jars` and `spark.files` and '--py-rilfes'
+    // is empty or only has `local://` URIs
+    if ((KubernetesFileUtils.getNonContainerLocalFiles(uris) ++ pySparkSubmitted).nonEmpty) {
+      Some(InitContainerBundle(provideInitContainerConfigMap(maybeSubmittedResourceIds),
+        provideInitContainerBootstrap(),
+        provideExecutorInitContainerConfiguration()))
+    } else None
   }
 }
