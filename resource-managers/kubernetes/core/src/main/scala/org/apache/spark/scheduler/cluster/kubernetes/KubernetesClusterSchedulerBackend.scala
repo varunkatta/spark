@@ -18,8 +18,12 @@ package org.apache.spark.scheduler.cluster.kubernetes
 
 import java.io.Closeable
 import java.net.InetAddress
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
+
+import scala.collection.{concurrent, mutable}
+import scala.collection.JavaConverters._
+import scala.concurrent.{ExecutionContext, Future}
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
@@ -27,9 +31,6 @@ import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClient, KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
 import org.apache.commons.io.FilenameUtils
-import scala.collection.mutable
-import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
 
 import org.apache.spark.{SparkContext, SparkEnv, SparkException}
 import org.apache.spark.deploy.kubernetes.{ConfigurationUtils, SparkPodInitContainerBootstrap}
@@ -53,12 +54,17 @@ private[spark] class KubernetesClusterSchedulerBackend(
   import KubernetesClusterSchedulerBackend._
 
   private val RUNNING_EXECUTOR_PODS_LOCK = new Object
-  private val runningExecutorsToPods = new mutable.HashMap[String, Pod] // Indexed by executor IDs.
-  private val runningPodsToExecutors = new mutable.HashMap[Pod, String] // Indexed by executor Pods.
+  // Indexed by executor IDs and guarded by RUNNING_EXECUTOR_PODS_LOCK.
+  private val runningExecutorsToPods = new mutable.HashMap[String, Pod]
+  // Indexed by executor pod names and guarded by RUNNING_EXECUTOR_PODS_LOCK.
+  private val runningPodsToExecutors = new mutable.HashMap[String, String]
+  // TODO(varun): Get rid of this lock object by my making the underlying map a concurrent hash map.
   private val EXECUTOR_PODS_BY_IPS_LOCK = new Object
-  private val executorPodsByIPs = new mutable.HashMap[String, Pod] // Indexed by executor IP addrs.
-  private val FAILED_PODS_LOCK = new Object
-  private val failedPods = new mutable.HashMap[String, ExecutorLossReason] // Indexed by pod names.
+  // Indexed by executor IP addrs and guarded by EXECUTOR_PODS_BY_IPS_LOCK
+  private val executorPodsByIPs = new mutable.HashMap[String, Pod]
+  // Indexed by pod names and guarded by FAILED_PODS_LOCK.
+  private val failedPods: concurrent.Map[String, ExecutorLossReason] = new
+      ConcurrentHashMap[String, ExecutorLossReason]().asScala
   private val EXECUTORS_TO_REMOVE_LOCK = new Object
   private val executorsToRemove = new mutable.HashSet[String]
 
@@ -198,16 +204,18 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
     override def run(): Unit = {
       removeFailedExecutors()
-      if (totalRegisteredExecutors.get() < runningExecutorsToPods.size) {
-        logDebug("Waiting for pending executors before scaling")
-      } else if (totalExpectedExecutors.get() <= runningExecutorsToPods.size) {
-        logDebug("Maximum allowed executor limit reached. Not scaling up further.")
-      } else {
-        val nodeToLocalTaskCount = getNodesWithLocalTaskCounts
-        RUNNING_EXECUTOR_PODS_LOCK.synchronized {
+      RUNNING_EXECUTOR_PODS_LOCK.synchronized {
+        if (totalRegisteredExecutors.get() < runningExecutorsToPods.size) {
+          logDebug("Waiting for pending executors before scaling")
+        } else if (totalExpectedExecutors.get() <= runningExecutorsToPods.size) {
+          logDebug("Maximum allowed executor limit reached. Not scaling up further.")
+        } else {
+          val nodeToLocalTaskCount = getNodesWithLocalTaskCounts
           for (i <- 0 until math.min(
             totalExpectedExecutors.get - runningExecutorsToPods.size, podAllocationSize)) {
-            runningExecutorsToPods += allocateNewExecutorPod(nodeToLocalTaskCount)
+            val (executorId, pod) = allocateNewExecutorPod(nodeToLocalTaskCount)
+            runningExecutorsToPods.put(executorId, pod)
+            runningPodsToExecutors.put(pod.getMetadata.getName, executorId)
             logInfo(
               s"Requesting a new executor, total executors is now ${runningExecutorsToPods.size}")
           }
@@ -219,16 +227,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
       val localRunningExecutorsToPods = RUNNING_EXECUTOR_PODS_LOCK.synchronized {
         runningExecutorsToPods.toMap
       }
-      val localFailedPods = FAILED_PODS_LOCK.synchronized {
-        failedPods.toMap
-      }
       val localExecutorsToRemove = EXECUTORS_TO_REMOVE_LOCK.synchronized {
         executorsToRemove.toSet
       }
       localExecutorsToRemove.foreach { case (executorId) =>
         localRunningExecutorsToPods.get(executorId) match {
           case Some(pod) =>
-            localFailedPods.get(pod.getMetadata.getName) match {
+            failedPods.get(pod.getMetadata.getName) match {
               case Some(executorExited: ExecutorExited) =>
                 logDebug(s"Removing executor $executorId with loss reason "
                   + executorExited.message)
@@ -246,13 +251,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
       executorsToRecover.foreach(executorId => {
         EXECUTORS_TO_REMOVE_LOCK.synchronized {
           executorsToRemove -= executorId
-          executorReasonChecks -= executorId
         }
+        executorReasonChecks -= executorId
         RUNNING_EXECUTOR_PODS_LOCK.synchronized {
           runningExecutorsToPods.remove(executorId) match {
             case Some(pod) =>
               kubernetesClient.pods().delete(pod)
-              runningPodsToExecutors.remove(pod)
+              runningPodsToExecutors.remove(pod.getMetadata.getName)
             case None => logWarning(s"Unable to remove pod for unknown executor $executorId")
           }
         }
@@ -342,6 +347,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
     try {
       RUNNING_EXECUTOR_PODS_LOCK.synchronized {
         runningExecutorsToPods.values.foreach(kubernetesClient.pods().delete(_))
+        runningExecutorsToPods.clear()
         runningPodsToExecutors.clear()
       }
       EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
@@ -360,7 +366,6 @@ private[spark] class KubernetesClusterSchedulerBackend(
     } catch {
       case e: Throwable => logError("Uncaught exception closing Kubernetes client.", e)
     }
-    super.stop()
   }
 
   /**
@@ -582,7 +587,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         runningExecutorsToPods.remove(executor) match {
           case Some(pod) =>
             kubernetesClient.pods().delete(pod)
-            runningPodsToExecutors.remove(pod)
+            runningPodsToExecutors.remove(pod.getMetadata.getName)
           case None => logWarning(s"Unable to remove pod for unknown executor $executor")
         }
       }
@@ -635,15 +640,15 @@ private[spark] class KubernetesClusterSchedulerBackend(
       logDebug("Executor pod watch closed.", cause)
     }
 
-    def getContainerExitStatus(pod: Pod): Int = {
+    def getExecutorExitStatus(pod: Pod): Int = {
       val containerStatuses = pod.getStatus.getContainerStatuses
       if (!containerStatuses.isEmpty) {
-        return getContainerExitStatus(containerStatuses.get(0))
+        return getExecutorExitStatus(containerStatuses.get(0))
       }
       DEFAULT_CONTAINER_FAILURE_EXIT_STATUS
     }
 
-    def getContainerExitStatus(containerStatus: ContainerStatus): Int = {
+    def getExecutorExitStatus(containerStatus: ContainerStatus): Int = {
       containerStatus.getState match {
         case null => UNKNOWN_EXIT_CODE
         case _ => containerStatus.getState.getTerminated match {
@@ -657,7 +662,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       def isPodAlreadyReleased(pod: Pod): Boolean = {
         RUNNING_EXECUTOR_PODS_LOCK.synchronized {
           runningPodsToExecutors.keySet.foreach(runningPod =>
-            if (runningPod.getMetadata.getName == pod.getMetadata.getName) {
+            if (runningPod == pod.getMetadata.getName) {
               return false
             }
           )
@@ -665,7 +670,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         true
       }
       val alreadyReleased = isPodAlreadyReleased(pod)
-      val containerExitStatus = getContainerExitStatus(pod)
+      val containerExitStatus = getExecutorExitStatus(pod)
       // container was probably actively killed by the driver.
       val exitReason = if (alreadyReleased) {
           ExecutorExited(containerExitStatus, exitCausedByApp = false,
@@ -683,17 +688,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
           }
           ExecutorExited(containerExitStatus, exitCausedByApp = true, containerExitReason)
         }
-      FAILED_PODS_LOCK.synchronized {
         failedPods.put(pod.getMetadata.getName, exitReason)
-      }
     }
 
     def handleDeletedPod(pod: Pod): Unit = {
-      val exitReason = ExecutorExited(getContainerExitStatus(pod), exitCausedByApp = false,
+      val exitReason = ExecutorExited(getExecutorExitStatus(pod), exitCausedByApp = false,
         "Pod " + pod.getMetadata.getName + " deleted or lost.")
-      FAILED_PODS_LOCK.synchronized {
         failedPods.put(pod.getMetadata.getName, exitReason)
-      }
     }
   }
 
