@@ -18,6 +18,7 @@ package org.apache.spark.scheduler.cluster.kubernetes
 
 import java.io.Closeable
 import java.net.InetAddress
+import java.util.Collections
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
@@ -27,12 +28,13 @@ import scala.concurrent.{ExecutionContext, Future}
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
-import io.fabric8.kubernetes.api.model.{ContainerBuilder, ContainerPortBuilder, ContainerStatus, EnvVarBuilder, EnvVarSourceBuilder, Pod, PodBuilder, QuantityBuilder}
+import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClient, KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
+import java.{lang, util}
 import org.apache.commons.io.FilenameUtils
-
 import org.apache.spark.{SparkContext, SparkEnv, SparkException}
+
 import org.apache.spark.deploy.kubernetes.{ConfigurationUtils, InitContainerResourceStagingServerSecretPlugin, PodWithDetachedInitContainer, SparkPodInitContainerBootstrap}
 import org.apache.spark.deploy.kubernetes.config._
 import org.apache.spark.deploy.kubernetes.constants._
@@ -41,8 +43,9 @@ import org.apache.spark.network.netty.SparkTransportConf
 import org.apache.spark.network.shuffle.kubernetes.KubernetesExternalShuffleClient
 import org.apache.spark.rpc.{RpcAddress, RpcCallContext, RpcEndpointAddress, RpcEnv}
 import org.apache.spark.scheduler.{ExecutorExited, ExecutorLossReason, SlaveLost, TaskSchedulerImpl}
-import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.{RetrieveSparkAppConfig, SparkAppConfig}
 import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend
+import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.{RetrieveSparkAppConfig,
+SparkAppConfig}
 import org.apache.spark.util.{ThreadUtils, Utils}
 
 private[spark] class KubernetesClusterSchedulerBackend(
@@ -64,11 +67,11 @@ private[spark] class KubernetesClusterSchedulerBackend(
   private val EXECUTOR_PODS_BY_IPS_LOCK = new Object
   // Indexed by executor IP addrs and guarded by EXECUTOR_PODS_BY_IPS_LOCK
   private val executorPodsByIPs = new mutable.HashMap[String, Pod]
-  // Indexed by pod names and guarded by FAILED_PODS_LOCK.
   private val failedPods: concurrent.Map[String, ExecutorLossReason] = new
       ConcurrentHashMap[String, ExecutorLossReason]().asScala
-  private val EXECUTORS_TO_REMOVE_LOCK = new Object
-  private val executorsToRemove = new mutable.HashSet[String]
+  private val _executorsToRemoveMap: util.Map[String, lang.Boolean] =
+    new ConcurrentHashMap[String, lang.Boolean]()
+  private val executorsToRemove = Collections.newSetFromMap[String](_executorsToRemoveMap).asScala
 
   private val executorExtraClasspath = conf.get(
     org.apache.spark.internal.config.EXECUTOR_CLASS_PATH)
@@ -140,7 +143,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       val parsedShuffleLabels = ConfigurationUtils.parseKeyValuePairs(
         conf.get(KUBERNETES_SHUFFLE_LABELS), KUBERNETES_SHUFFLE_LABELS.key,
             "shuffle-labels")
-      if (parsedShuffleLabels.size == 0) {
+      if (parsedShuffleLabels.isEmpty) {
         throw new SparkException(s"Dynamic allocation enabled " +
           s"but no ${KUBERNETES_SHUFFLE_LABELS.key} specified")
       }
@@ -229,10 +232,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       val localRunningExecutorsToPods = RUNNING_EXECUTOR_PODS_LOCK.synchronized {
         runningExecutorsToPods.toMap
       }
-      val localExecutorsToRemove = EXECUTORS_TO_REMOVE_LOCK.synchronized {
-        executorsToRemove.toSet
-      }
-      localExecutorsToRemove.foreach { case (executorId) =>
+      executorsToRemove.foreach { case (executorId) =>
         localRunningExecutorsToPods.get(executorId) match {
           case Some(pod) =>
             failedPods.get(pod.getMetadata.getName) match {
@@ -251,9 +251,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         }
       }
       executorsToRecover.foreach(executorId => {
-        EXECUTORS_TO_REMOVE_LOCK.synchronized {
-          executorsToRemove -= executorId
-        }
+        executorsToRemove -= executorId
         executorReasonChecks -= executorId
         RUNNING_EXECUTOR_PODS_LOCK.synchronized {
           runningExecutorsToPods.remove(executorId) match {
@@ -686,13 +684,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
     def handleErroredPod(pod: Pod): Unit = {
       def isPodAlreadyReleased(pod: Pod): Boolean = {
         RUNNING_EXECUTOR_PODS_LOCK.synchronized {
-          runningPodsToExecutors.keySet.foreach(runningPod =>
-            if (runningPod == pod.getMetadata.getName) {
-              return false
-            }
-          )
+          !runningPodsToExecutors.contains(pod.getMetadata.getName)
         }
-        true
       }
       val alreadyReleased = isPodAlreadyReleased(pod)
       val containerExitStatus = getExecutorExitStatus(pod)
@@ -736,9 +729,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
     override def onDisconnected(rpcAddress: RpcAddress): Unit = {
       addressToExecutorId.get(rpcAddress).foreach { executorId =>
         if (disableExecutor(executorId)) {
-          EXECUTORS_TO_REMOVE_LOCK.synchronized {
             executorsToRemove.add(executorId)
-          }
         }
       }
     }
