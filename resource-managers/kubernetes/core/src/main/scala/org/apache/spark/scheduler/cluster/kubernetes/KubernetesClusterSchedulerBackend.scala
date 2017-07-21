@@ -517,6 +517,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       .endMetadata()
       .withNewSpec()
         .withHostname(hostname)
+        .withRestartPolicy("Never")
         .withNodeSelector(nodeSelector.asJava)
       .endSpec()
       .build()
