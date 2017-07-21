@@ -627,7 +627,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
     override def eventReceived(action: Action, pod: Pod): Unit = {
       if (action == Action.MODIFIED && pod.getStatus.getPhase == "Running"
-        && pod.getMetadata.getDeletionTimestamp == null) {
+          && pod.getMetadata.getDeletionTimestamp == null) {
         val podIP = pod.getStatus.getPodIP
         val clusterNodeName = pod.getSpec.getNodeName
         logDebug(s"Executor pod $pod ready, launched at $clusterNodeName as IP $podIP.")
@@ -635,7 +635,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
           executorPodsByIPs += ((podIP, pod))
         }
       } else if ((action == Action.MODIFIED && pod.getMetadata.getDeletionTimestamp != null) ||
-        action == Action.DELETED || action == Action.ERROR) {
+          action == Action.DELETED || action == Action.ERROR) {
         val podName = pod.getMetadata.getName
         val podIP = pod.getStatus.getPodIP
         logDebug(s"Executor pod $podName at IP $podIP was at $action.")
