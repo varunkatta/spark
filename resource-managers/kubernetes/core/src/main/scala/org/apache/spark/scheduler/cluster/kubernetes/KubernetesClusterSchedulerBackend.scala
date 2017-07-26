@@ -61,10 +61,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
   private val runningExecutorsToPods = new mutable.HashMap[String, Pod]
   // Indexed by executor pod names and guarded by RUNNING_EXECUTOR_PODS_LOCK.
   private val runningPodsToExecutors = new mutable.HashMap[String, String]
-  // TODO(varun): Get rid of this lock object by my making the underlying map a concurrent hash map.
-  private val EXECUTOR_PODS_BY_IPS_LOCK = new Object
-  // Indexed by executor IP addrs and guarded by EXECUTOR_PODS_BY_IPS_LOCK
-  private val executorPodsByIPs = new mutable.HashMap[String, Pod]
+  private val executorPodsByIPs: concurrent.Map[String, Pod] = new
+          ConcurrentHashMap[String, Pod]().asScala
   private val failedPods: concurrent.Map[String, ExecutorExited] = new
       ConcurrentHashMap[String, ExecutorExited]().asScala
   private val executorsToRemove = Collections.newSetFromMap[String](
@@ -190,13 +188,13 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
   private val podAllocationInterval = conf.get(KUBERNETES_ALLOCATION_BATCH_DELAY)
   require(podAllocationInterval > 0, s"Allocation batch delay " +
-    s"${KUBERNETES_ALLOCATION_BATCH_DELAY} " +
-    s"is ${podAllocationInterval}, should be a positive integer")
+    s"$KUBERNETES_ALLOCATION_BATCH_DELAY " +
+    s"is $podAllocationInterval, should be a positive integer")
 
   private val podAllocationSize = conf.get(KUBERNETES_ALLOCATION_BATCH_SIZE)
   require(podAllocationSize > 0, s"Allocation batch size " +
-    s"${KUBERNETES_ALLOCATION_BATCH_SIZE} " +
-    s"is ${podAllocationSize}, should be a positive integer")
+    s"$KUBERNETES_ALLOCATION_BATCH_SIZE " +
+    s"is $podAllocationSize, should be a positive integer")
 
   private val allocator = ThreadUtils
     .newDaemonSingleThreadScheduledExecutor("kubernetes-pod-allocator")
@@ -345,9 +343,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         runningExecutorsToPods.clear()
         runningPodsToExecutors.clear()
       }
-      EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
-        executorPodsByIPs.clear()
-      }
+      executorPodsByIPs.clear()
       val resource = executorWatchResource.getAndSet(null)
       if (resource != null) {
         resource.close()
@@ -368,14 +364,11 @@ private[spark] class KubernetesClusterSchedulerBackend(
    *         locality if an executor launches on the cluster node.
    */
   private def getNodesWithLocalTaskCounts() : Map[String, Int] = {
-    val executorPodsWithIPs = EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
-      executorPodsByIPs.values.toList  // toList makes a defensive copy.
-    }
     val nodeToLocalTaskCount = mutable.Map[String, Int]() ++
       KubernetesClusterSchedulerBackend.this.synchronized {
         hostToLocalTaskCount
       }
-    for (pod <- executorPodsWithIPs) {
+    for ((_, pod) <- executorPodsByIPs) {
       // Remove cluster nodes that are running our executors already.
       // TODO: This prefers spreading out executors across nodes. In case users want
       // consolidating executors on fewer nodes, introduce a flag. See the spark.deploy.spreadOut
@@ -616,9 +609,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
   }
 
   def getExecutorPodByIP(podIP: String): Option[Pod] = {
-    EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
       executorPodsByIPs.get(podIP)
-    }
   }
 
   private class ExecutorPodsWatcher extends Watcher[Pod] {
@@ -631,18 +622,14 @@ private[spark] class KubernetesClusterSchedulerBackend(
         val podIP = pod.getStatus.getPodIP
         val clusterNodeName = pod.getSpec.getNodeName
         logDebug(s"Executor pod $pod ready, launched at $clusterNodeName as IP $podIP.")
-        EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
           executorPodsByIPs += ((podIP, pod))
-        }
       } else if ((action == Action.MODIFIED && pod.getMetadata.getDeletionTimestamp != null) ||
           action == Action.DELETED || action == Action.ERROR) {
         val podName = pod.getMetadata.getName
         val podIP = pod.getStatus.getPodIP
         logDebug(s"Executor pod $podName at IP $podIP was at $action.")
         if (podIP != null) {
-          EXECUTOR_PODS_BY_IPS_LOCK.synchronized {
             executorPodsByIPs -= podIP
-          }
         }
         if (action == Action.ERROR) {
           logInfo(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
