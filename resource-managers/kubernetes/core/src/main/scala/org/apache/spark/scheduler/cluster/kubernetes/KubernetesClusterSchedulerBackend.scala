@@ -28,7 +28,7 @@ import io.fabric8.kubernetes.api.model._
 import io.fabric8.kubernetes.client.{KubernetesClient, KubernetesClientException, Watcher}
 import io.fabric8.kubernetes.client.Watcher.Action
 import org.apache.commons.io.FilenameUtils
-import scala.collection.{concurrent, mutable}
+import scala.collection.mutable
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -61,10 +61,8 @@ private[spark] class KubernetesClusterSchedulerBackend(
   private val runningExecutorsToPods = new mutable.HashMap[String, Pod]
   // Indexed by executor pod names and guarded by RUNNING_EXECUTOR_PODS_LOCK.
   private val runningPodsToExecutors = new mutable.HashMap[String, String]
-  private val executorPodsByIPs: concurrent.Map[String, Pod] = new
-          ConcurrentHashMap[String, Pod]().asScala
-  private val failedPods: concurrent.Map[String, ExecutorExited] = new
-      ConcurrentHashMap[String, ExecutorExited]().asScala
+  private val executorPodsByIPs = new ConcurrentHashMap[String, Pod]()
+  private val failedPods = new ConcurrentHashMap[String, ExecutorExited]()
   private val executorsToRemove = Collections.newSetFromMap[String](
     new ConcurrentHashMap[String, java.lang.Boolean]()).asScala
 
@@ -236,7 +234,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       }
       executorsToRemove.foreach { case (executorId) =>
         localRunningExecutorsToPods.get(executorId).map { pod: Pod =>
-          failedPods.get(pod.getMetadata.getName).map { executorExited: ExecutorExited =>
+          Option(failedPods.get(pod.getMetadata.getName)).map { executorExited: ExecutorExited =>
             logDebug(s"Removing executor $executorId with loss reason " + executorExited.message)
             removeExecutor(executorId, executorExited)
             if (!executorExited.exitCausedByApp) {
@@ -368,7 +366,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
       KubernetesClusterSchedulerBackend.this.synchronized {
         hostToLocalTaskCount
       }
-    for ((_, pod) <- executorPodsByIPs) {
+    for (pod <- executorPodsByIPs.values().asScala) {
       // Remove cluster nodes that are running our executors already.
       // TODO: This prefers spreading out executors across nodes. In case users want
       // consolidating executors on fewer nodes, introduce a flag. See the spark.deploy.spreadOut
@@ -614,7 +612,11 @@ private[spark] class KubernetesClusterSchedulerBackend(
   }
 
   def getExecutorPodByIP(podIP: String): Option[Pod] = {
-      executorPodsByIPs.get(podIP)
+    // Note: Per https://github.com/databricks/scala-style-guide#concurrency, we don't
+    // want to be switching to scala.collection.concurrent.Map on
+    // executorPodsByIPs.
+      val pod = executorPodsByIPs.get(podIP)
+      Option(pod)
   }
 
   private class ExecutorPodsWatcher extends Watcher[Pod] {
@@ -627,14 +629,14 @@ private[spark] class KubernetesClusterSchedulerBackend(
         val podIP = pod.getStatus.getPodIP
         val clusterNodeName = pod.getSpec.getNodeName
         logDebug(s"Executor pod $pod ready, launched at $clusterNodeName as IP $podIP.")
-          executorPodsByIPs += ((podIP, pod))
+          executorPodsByIPs.put(podIP, pod)
       } else if ((action == Action.MODIFIED && pod.getMetadata.getDeletionTimestamp != null) ||
           action == Action.DELETED || action == Action.ERROR) {
         val podName = pod.getMetadata.getName
         val podIP = pod.getStatus.getPodIP
         logDebug(s"Executor pod $podName at IP $podIP was at $action.")
         if (podIP != null) {
-            executorPodsByIPs -= podIP
+          executorPodsByIPs.remove(podIP)
         }
         if (action == Action.ERROR) {
           logInfo(s"Received pod $podName exited event. Reason: " + pod.getStatus.getReason)
