@@ -10,6 +10,7 @@ This is a collaboratively maintained project working on [SPARK-18278](https://is
 
 - [Usage guide](https://apache-spark-on-k8s.github.io/userdocs/) shows how to run the code
 - [Development docs](resource-managers/kubernetes/README.md) shows how to get set up for development
+- [Architecture docs](resource-managers/kubernetes/architecture-docs/) shows the high level architecture of Spark on Kubernetes
 - Code is primarily located in the [resource-managers/kubernetes](resource-managers/kubernetes) folder
 
 ## Why does this fork exist?
