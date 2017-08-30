@@ -109,16 +109,16 @@ private[spark] class KubernetesClusterSchedulerBackend(
       throw new SparkException("Must specify the driver pod name"))
   private val executorPodNamePrefix = conf.get(KUBERNETES_EXECUTOR_POD_NAME_PREFIX)
 
-  private val executorMemoryMb = conf.get(org.apache.spark.internal.config.EXECUTOR_MEMORY)
+  private val executorMemoryMiB = conf.get(org.apache.spark.internal.config.EXECUTOR_MEMORY)
   private val executorMemoryString = conf.get(
     org.apache.spark.internal.config.EXECUTOR_MEMORY.key,
     org.apache.spark.internal.config.EXECUTOR_MEMORY.defaultValueString)
 
-  private val memoryOverheadMb = conf
+  private val memoryOverheadMiB = conf
     .get(KUBERNETES_EXECUTOR_MEMORY_OVERHEAD)
-    .getOrElse(math.max((MEMORY_OVERHEAD_FACTOR * executorMemoryMb).toInt,
-      MEMORY_OVERHEAD_MIN))
-  private val executorMemoryWithOverhead = executorMemoryMb + memoryOverheadMb
+    .getOrElse(math.max((MEMORY_OVERHEAD_FACTOR * executorMemoryMiB).toInt,
+      MEMORY_OVERHEAD_MIN_MIB))
+  private val executorMemoryWithOverheadMiB = executorMemoryMiB + memoryOverheadMiB
 
   private val executorCores = conf.getDouble("spark.executor.cores", 1d)
   private val executorLimitCores = conf.getOption(KUBERNETES_EXECUTOR_LIMIT_CORES.key)
@@ -432,10 +432,10 @@ private[spark] class KubernetesClusterSchedulerBackend(
       SPARK_ROLE_LABEL -> SPARK_POD_EXECUTOR_ROLE) ++
       executorLabels
     val executorMemoryQuantity = new QuantityBuilder(false)
-      .withAmount(s"${executorMemoryMb}M")
+      .withAmount(s"${executorMemoryMiB}Mi")
       .build()
     val executorMemoryLimitQuantity = new QuantityBuilder(false)
-      .withAmount(s"${executorMemoryWithOverhead}M")
+      .withAmount(s"${executorMemoryWithOverheadMiB}Mi")
       .build()
     val executorCpuQuantity = new QuantityBuilder(false)
       .withAmount(executorCores.toString)
@@ -446,7 +446,16 @@ private[spark] class KubernetesClusterSchedulerBackend(
         .withValue(cp)
         .build()
     }
-    val requiredEnv = (Seq(
+    val executorExtraJavaOptionsEnv = conf
+        .get(org.apache.spark.internal.config.EXECUTOR_JAVA_OPTIONS)
+        .map { opts =>
+          val delimitedOpts = Utils.splitCommandString(opts)
+          delimitedOpts.zipWithIndex.map {
+            case (opt, index) =>
+              new EnvVarBuilder().withName(s"$ENV_JAVA_OPT_PREFIX$index").withValue(opt).build()
+          }
+        }.getOrElse(Seq.empty[EnvVar])
+    val executorEnv = (Seq(
       (ENV_EXECUTOR_PORT, executorPort.toString),
       (ENV_DRIVER_URL, driverUrl),
       // Executor backend expects integral value for executor cores, so round it up to an int.
@@ -466,7 +475,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
           .withNewFieldRef("v1", "status.podIP")
           .build())
         .build()
-      )
+      ) ++ executorExtraJavaOptionsEnv ++ executorExtraClasspathEnv.toSeq
     val requiredPorts = Seq(
       (EXECUTOR_PORT_NAME, executorPort),
       (BLOCK_MANAGER_PORT_NAME, blockmanagerPort))
@@ -486,8 +495,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         .addToLimits("memory", executorMemoryLimitQuantity)
         .addToRequests("cpu", executorCpuQuantity)
       .endResources()
-      .addAllToEnv(requiredEnv.asJava)
-      .addToEnv(executorExtraClasspathEnv.toSeq: _*)
+      .addAllToEnv(executorEnv.asJava)
       .withPorts(requiredPorts.asJava)
       .build()
 
@@ -552,7 +560,7 @@ private[spark] class KubernetesClusterSchedulerBackend(
         mountSmallFilesBootstrap.map { bootstrap =>
           bootstrap.mountSmallFilesSecret(
             withMaybeShuffleConfigPod, withMaybeShuffleConfigExecutorContainer)
-        }.getOrElse(withMaybeShuffleConfigPod, withMaybeShuffleConfigExecutorContainer)
+        }.getOrElse((withMaybeShuffleConfigPod, withMaybeShuffleConfigExecutorContainer))
     val (executorPodWithInitContainer, initBootstrappedExecutorContainer) =
         executorInitContainerBootstrap.map { bootstrap =>
           val podWithDetachedInitContainer = bootstrap.bootstrapInitContainerAndVolumes(
