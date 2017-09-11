@@ -24,6 +24,8 @@ should give you a list of pods and configmaps (if any) respectively.
 * You must have a spark distribution with Kubernetes support. This may be obtained from the
 [release tarball](https://github.com/apache-spark-on-k8s/spark/releases) or by
 [building Spark with Kubernetes support](../resource-managers/kubernetes/README.md#building-spark-with-kubernetes-support).
+* You must have [Kubernetes DNS](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) configured in
+your cluster.
 
 ## Driver & Executor Images
 
@@ -796,6 +798,22 @@ from the other deployment modes. See the [configuration page](configuration.html
   <td>
     Add the environment variable specified by <code>EnvironmentVariableName</code> to
     the Driver process. The user can specify multiple of these to set multiple environment variables.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.driver.secrets.[SecretName]</code></td>
+  <td>(none)</td>
+  <td>
+    Mounts the Kubernetes secret named <code>SecretName</code> onto the path specified by the value
+    in the driver Pod. The user can specify multiple instances of this for multiple secrets.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.kubernetes.executor.secrets.[SecretName]</code></td>
+  <td>(none)</td>
+  <td>
+    Mounts the Kubernetes secret named <code>SecretName</code> onto the path specified by the value
+    in the executor Pods. The user can specify multiple instances of this for multiple secrets.
   </td>
 </tr>
 </table>
